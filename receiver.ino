@@ -41,6 +41,7 @@ void setup() {
     display.init();
 
     display.setFont(ArialMT_Plain_16);
+
     display.drawString(0, 0, "FinishTime");
     display.drawString(0, 20, "Waiting for Data");
     display.display();
@@ -79,28 +80,54 @@ void loop()
 
 void OnRxDone( uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t snr )
 {
-    // Copy payload into rxpacket and null-terminate
     memcpy(rxpacket, payload, size );
     rxpacket[size] = '\0';
 
-    Radio.Sleep( );
-
+    // Print raw received string to Serial
     Serial.println(rxpacket);
 
     // Parse CSV string
     char *carID = strtok(rxpacket, ",");
     char *finishTime = strtok(NULL, ",");
+    char *ftd = strtok(NULL, ",");
+    char *personalBest = strtok(NULL, ",");
+    char *offCourse = strtok(NULL, ",");
+    char *cones = strtok(NULL, ",");
 
     display.clear();
     display.setFont(ArialMT_Plain_24);
 
+    // Line 1: Car ID
     if (carID != NULL) {
         display.drawString(0, 0, String(carID));
     }
+
+    // Line 2: Finish Time (+cones if not zero)
+    String finishDisplay = "";
     if (finishTime != NULL) {
-        display.drawString(0, 20, String(finishTime));
+        finishDisplay = String(finishTime);
+        if (cones != NULL && atoi(cones) != 0) {
+            finishDisplay += " +" + String(atoi(cones));
+        }
+        display.drawString(0, 20, finishDisplay);
     }
+
+    // Line 3: Status Message, priority: Off Course > FTD > Personal Best
+    String statusMsg = "";
+    if (offCourse != NULL && atoi(offCourse)) {
+        statusMsg = "Off Course";
+    } else if (ftd != NULL && atoi(ftd)) {
+        statusMsg = "FTD!";
+    } else if (personalBest != NULL && atoi(personalBest)) {
+        statusMsg = "PB";
+    }
+
+    if (statusMsg.length() > 0) {
+        display.drawString(0, 40, statusMsg);
+    }
+
     display.display();
 
     lora_idle = true;
 }
+
