@@ -41,7 +41,6 @@ void setup() {
     display.init();
 
     display.setFont(ArialMT_Plain_16);
-
     display.drawString(0, 0, "FinishTime");
     display.drawString(0, 20, "Waiting for Data");
     display.display();
@@ -86,8 +85,7 @@ void OnRxDone( uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t snr )
 
     Radio.Sleep( );
 
-    Serial.printf(rxpacket);
-    Serial.println();
+    Serial.println(rxpacket);
 
     // Parse CSV string
     char *carID = strtok(rxpacket, ",");
