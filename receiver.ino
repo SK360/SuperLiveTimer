@@ -1,4 +1,4 @@
-#include <Wire.h>  
+#include <Wire.h>
 #include "LoRaWan_APP.h"
 #include "Arduino.h"
 #include "HT_SSD1306Wire.h"
@@ -6,9 +6,7 @@
 static SSD1306Wire  display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED); // addr , freq , i2c group , resolution , rst
 
 #define RF_FREQUENCY                                915000000 // Hz
-
 #define TX_OUTPUT_POWER                             14        // dBm
-
 #define LORA_BANDWIDTH                              0         // [0: 125 kHz, 1: 250 kHz, 2: 500 kHz, 3: Reserved]
 #define LORA_SPREADING_FACTOR                       7         // [SF7..SF12]
 #define LORA_CODINGRATE                             1         // [1: 4/5, 2: 4/6, 3: 4/7, 4: 4/8]
@@ -29,6 +27,19 @@ int16_t txNumber;
 int16_t rssi,rxSize;
 
 bool lora_idle = true;
+
+// ---- FORMAT CAR ID FUNCTION ----
+String formatCarID(const char* carID) {
+    String id(carID);
+    for (unsigned int i = 0; i < id.length(); i++) {
+        if (isalpha(id[i])) {
+            id = id.substring(0, i) + " " + id.substring(i);
+            break;
+        }
+    }
+    return id;
+}
+// --------------------------------
 
 void setup() {
     Serial.begin(115200);
@@ -72,7 +83,7 @@ void loop()
   if(lora_idle)
   {
     lora_idle = false;
-    ///Serial.println("into RX mode");
+    //Serial.println("into RX mode");
     Radio.Rx(0);
   }
   Radio.IrqProcess( );
@@ -97,9 +108,9 @@ void OnRxDone( uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t snr )
     display.clear();
     display.setFont(ArialMT_Plain_24);
 
-    // Line 1: Car ID
+    // Line 1: Car ID (now formatted with space between numbers and letters)
     if (carID != NULL) {
-        display.drawString(0, 0, String(carID));
+        display.drawString(0, 0, formatCarID(carID));
     }
 
     // Line 2: Finish Time (+cones if not zero)
@@ -130,4 +141,3 @@ void OnRxDone( uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t snr )
 
     lora_idle = true;
 }
-
