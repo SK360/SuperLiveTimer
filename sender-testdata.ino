@@ -1,12 +1,12 @@
 #include "LoRaWan_APP.h"
 #include "Arduino.h"
-#include <Wire.h>  
+#include <Wire.h>
 #include "HT_SSD1306Wire.h"
 
 static SSD1306Wire  display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED); // addr , freq , i2c group , resolution , rst
 
 #define RF_FREQUENCY                                915000000 // Hz
-#define TX_OUTPUT_POWER                             5        // dBm
+#define TX_OUTPUT_POWER                             14        // dBm
 
 #define LORA_BANDWIDTH                              0
 #define LORA_SPREADING_FACTOR                       7
@@ -27,13 +27,29 @@ static RadioEvents_t RadioEvents;
 void OnTxDone(void);
 void OnTxTimeout(void);
 
-// Example data (set as needed)
-const char* CarID = "66EVX";
+// -------- NEW: CarID List ---------
+const char* CarIDList[] = {
+    "66EVX",
+    "18CAMS",
+    "83SS",
+    "88ES",
+    "49GST",
+    "91XP"
+};
+const int CarIDListSize = sizeof(CarIDList)/sizeof(CarIDList[0]);
+// ----------------------------------
+
+// Example data (default state)
+const char* CarID = "66EVX"; // will be set randomly each time now
 float finishtime = 24.345;
 bool ftd = true;
 bool personalbest = false;
 bool offcourse = false;
-int cones = 2;
+int cones = 0;
+
+// --------- Step tracking variable ----------
+static int sendStep = 0;  // 0-4 for 5 steps
+// -------------------------------------------
 
 void setup() {
     Serial.begin(115200);
@@ -76,6 +92,47 @@ void loop()
     {
         delay(3000);
 
+        // -------------- Random CarID --------------------
+        int carIdx = random(0, CarIDListSize);
+        CarID = CarIDList[carIdx];
+        // ------------------------------------------------
+
+        // -------------- Cycle through flag settings --------------------
+        switch(sendStep) {
+            case 0: // FTD only
+                ftd = true;
+                personalbest = false;
+                offcourse = false;
+                cones = 0;
+                break;
+            case 1: // PersonalBest only
+                ftd = false;
+                personalbest = true;
+                offcourse = false;
+                cones = 0;
+                break;
+            case 2: // OffCourse only
+                ftd = false;
+                personalbest = false;
+                offcourse = true;
+                cones = 0;
+                break;
+            case 3: // Cones=2, all flags false
+                ftd = false;
+                personalbest = false;
+                offcourse = false;
+                cones = 2;
+                break;
+            case 4: // NEW: All flags false, cones=0
+                ftd = false;
+                personalbest = false;
+                offcourse = false;
+                cones = 0;
+                break;
+        }
+        sendStep = (sendStep + 1) % 5;  // 0-4 for 5 steps, then loop
+        // ----------------------------------------------------------------
+
         // Generate random finishtime between 20.000 and 40.000
         long finishtime_raw = random(20000, 40001);  // 20000 to 40000 inclusive
         finishtime = finishtime_raw / 1000.0;
@@ -95,7 +152,8 @@ void loop()
         Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", txpacket, strlen(txpacket));
 
         display.clear();
-        display.drawString(0, 0, ft_str);
+        display.drawString(0, 0, "Test Mode");
+        display.drawString(0, 20, ft_str);
         display.display();
 
         Radio.Send((uint8_t *)txpacket, strlen(txpacket));
