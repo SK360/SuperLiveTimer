@@ -54,16 +54,34 @@ CarID,FinishTime,FTD,PersonalBest,OffCourse,Cones
 
 ---
 
+## Serial Output for External Hardware
+
+The `receiver.ino` sketch **outputs each parsed CSV result to the Serial port (115200 baud)**.  
+This feature allows you to connect the Heltec receiver to external hardware such as:
+
+- Large LED display boards
+- Raspberry Pi, PC, or other microcontrollers
+- Data loggers, scoreboards, etc.
+
+**Example serial output:**
+```
+66EVX,23.512,1,0,0,0
+```
+This output appears on every valid packet received, matching the format described above.
+
+---
+
 ## Usage
 
 ### 1. receiver.ino
 
 - **Purpose:** Receives LoRa packets and displays parsed results on the OLED (Car ID, finish time, and status).
 - **Display:** Car ID, Finish Time (+cone penalties if any), and a status line ("Off Course", "FTD!", "PB") in priority order.
+- **Serial Output:** Each valid result is also printed to Serial for connection to external display boards or data loggers.
 - **Setup:**
   1. Flash `receiver.ino` to your Heltec V3.
   2. Power it up. The display will show "Waiting for Data" until a valid packet is received.
-  3. When data is received, results are shown for each run.
+  3. When data is received, results are shown for each run, and the parsed CSV is output over Serial.
 
 ### 2. sender.ino
 
@@ -130,8 +148,15 @@ This means Car `18CAMS` finished with a time of `24.451`, did **not** get FTD, a
 
 ---
 
+## License
+
+MIT License (or your preferred license)
+
+---
+
 ## Credits
 
-Created by Matt Simmons.  
+Created by [Your Name / Team].  
+Special thanks to Heltec for the hardware and Arduino community for the libraries.
 
 ---
