@@ -6,7 +6,7 @@
 static SSD1306Wire  display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED); // addr , freq , i2c group , resolution , rst
 
 #define RF_FREQUENCY                                915000000 // Hz
-#define TX_OUTPUT_POWER                             14        // dBm
+#define TX_OUTPUT_POWER                             21        // dBm
 
 #define LORA_BANDWIDTH                              0
 #define LORA_SPREADING_FACTOR                       7
