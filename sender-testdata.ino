@@ -169,6 +169,8 @@ void loop()
 void OnTxDone(void)
 {
     Serial.println("TX done......");
+    display.drawString(0, 40, "Sent");
+    display.display();
     lora_idle = true;
 }
 
