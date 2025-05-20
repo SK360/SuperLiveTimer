@@ -7,141 +7,99 @@ The system is designed for **motorsports or time trial events** where finish tim
 
 ## Sketches Overview
 
-- **receiver.ino**: Listens for incoming LoRa packets and displays parsed results on the Heltec OLED.
-- **sender.ino**: Reads result strings from the Serial port, sends them via LoRa, and briefly displays the transmitted finish time on its OLED.
-- **sender-testdata.ino**: A test/demo version of the sender that generates and sends *simulated* race results every few seconds with random values for easy testing.
+- **receiver.ino**: Listens for incoming LoRa packets, displays results on the Heltec OLED, and outputs plain CSV to Serial for external displays.
+- **sender.ino**: Supports both live Serial input mode **and** a Test Data mode (switchable by button press).
 
 ---
 
 ## Hardware Requirements
 
-- [Heltec WiFi LoRa 32 (V3)](https://heltec.org/project/wifi-lora-32-v3/) for both sender and receiver (at least 2 boards required).
+- [Heltec WiFi LoRa 32 (V3)](https://heltec.org/project/wifi-lora-32-v3/) boards (at least 2).
 - USB cable for programming.
-- Arduino IDE (1.8.x or 2.x) with Heltec board support and required libraries.
+- Arduino IDE with Heltec board support and libraries.
 
 ---
 
 ## Library Dependencies
 
-Install these via **Library Manager**:
+Install via **Library Manager**:
 - `LoRaWan_APP.h` (from Heltec ESP32 board package)
 - `HT_SSD1306Wire.h` (included with Heltec board package)
-
-Add Heltec board support using [these instructions](https://heltec-automation-docs.readthedocs.io/en/latest/general/establish_serial_connection.html).
 
 ---
 
 ## Data Format
 
-All communication is in **CSV (comma-separated value) strings**, e.g.:
-
+Communication uses a **CSV string**:
 ```
 CarID,FinishTime,FTD,PersonalBest,OffCourse,Cones
 ```
 
-- **CarID**: String (e.g. `66EVX`)
-- **FinishTime**: Float (e.g. `23.512`)
-- **FTD**: `1` if fastest time of the day, else `0`
-- **PersonalBest**: `1` if personal best, else `0`
-- **OffCourse**: `1` if run was off course, else `0`
-- **Cones**: Integer, number of cones hit
-
-**Example:**
-
-```
-66EVX,23.512,1,0,0,0
-```
+**Example:**  
+`66EVX,23.512,1,0,0,0`
 
 ---
 
-## Serial Output for External Hardware
-
-The `receiver.ino` sketch **outputs each parsed CSV result to the Serial port (115200 baud)**.  
-This feature allows you to connect the Heltec receiver to external hardware such as:
-
-- Large LED display boards
-- Raspberry Pi, PC, or other microcontrollers
-- Data loggers, scoreboards, etc.
-
-**Example serial output:**
-```
-66EVX,23.512,1,0,0,0
-```
-This output appears on every valid packet received, matching the format described above.
-
----
-
-## Usage
+## How to Use
 
 ### 1. receiver.ino
 
-- **Purpose:** Receives LoRa packets and displays parsed results on the OLED (Car ID, finish time, and status).
-- **Display:** Car ID, Finish Time (+cone penalties if any), and a status line ("Off Course", "FTD!", "PB") in priority order.
-- **Serial Output:** Each valid result is also printed to Serial for connection to external display boards or data loggers.
+- **Displays** incoming results on OLED (Car ID, time, status).
+- **Outputs** received/parsed CSV data to Serial (115200 baud) for connection to timer displays, PCs, or Raspberry Pi.
+- **MAGIC_WORD** filtering ensures only packets sent by a matching sender are displayed.
 - **Setup:**
-  1. Flash `receiver.ino` to your Heltec V3.
-  2. Power it up. The display will show "Waiting for Data" until a valid packet is received.
-  3. When data is received, results are shown for each run, and the parsed CSV is output over Serial.
+  1. Flash `receiver.ino` to a Heltec V3 board.
+  2. Connect USB to PC/display hardware if using serial output.
+  3. Watch the OLED or external display for results.
 
 ### 2. sender.ino
 
-- **Purpose:** Sends result strings typed/piped over Serial to the LoRa receiver.
-- **Display:** Shows the finish time briefly on its OLED when a packet is sent.
+- **Dual-mode operation:**  
+  - **Serial Mode:** Default. Any line sent over Serial is parsed and sent via LoRa.
+  - **Test Data Mode:** Generates simulated race results automatically every 3 seconds.
+- **Switching Modes:**  
+  - **Hold USER button (GPIO 0) for 1 second** to toggle between Serial and Test Data mode. OLED shows the current mode.
+- **MAGIC_WORD** is included in each packet for filtering.
 - **Setup:**
-  1. Flash `sender.ino` to another Heltec V3.
-  2. Open Serial Monitor/Serial Plotter at 115200 baud.
-  3. Type or pipe a result line in the specified CSV format (see above) and press Enter.
-  4. Each valid line is transmitted wirelessly via LoRa.
+  1. Flash `sender.ino` to a Heltec V3.
+  2. Connect USB for Serial input if desired.
+  3. Use the USER button to switch modes as needed.
 
-### 3. sender-testdata.ino
+---
 
-- **Purpose:** Sends *random, simulated* result data every 3 seconds for receiver testing.
-- **Behavior:** Cycles through different scenarios:
-    - FTD
-    - Personal Best
-    - Off Course
-    - Cones penalty
-    - Normal run
-- **Setup:**
-  1. Flash `sender-testdata.ino` to your sender Heltec V3.
-  2. Power on: The board will start transmitting test data automatically, cycling through different results.
-  3. The OLED shows "Test Mode" and the random finish time being sent.
+## Example Workflows
+
+### Serial Input Mode
+1. Open Serial Monitor (115200 baud).
+2. Enter a line like:  
+   ```
+   18CAMS,24.451,0,1,0,2
+   ```
+3. Sender transmits it, receiver displays and relays to external hardware via Serial.
+
+### Test Data Mode
+1. Hold USER button for 1 second to enter Test Mode.
+2. The sender’s OLED shows "Test Mode" and sends random result data every 3 seconds for receiver testing.
 
 ---
 
 ## Configuration
 
-- **LoRa Frequency:** Set to 915MHz (for North America). Change `RF_FREQUENCY` in all sketches for your region (e.g. 868MHz for EU).
-- **Transmission Power:** Default set for typical use, but can be adjusted in the sketch.
+- **LoRa Frequency:** Default 915MHz (North America). Change `RF_FREQUENCY` as needed.
+- **MAGIC_WORD:** Change in both sketches for simple filtering if running multiple independent systems.
 
 ---
 
-## Display Logic
+## System Diagram
 
-`receiver.ino` parses each incoming CSV, and displays:
-- **Line 1:** Car ID (formatted with a space between numbers and letters for readability)
-- **Line 2:** Finish Time (plus "+[cones]" if any were hit)
-- **Line 3:** Status message, in this priority:
-    - "Off Course" if offcourse flag is set
-    - "FTD!" if FTD flag is set
-    - "PB" if personal best flag is set
-
----
-
-## Serial Example for sender.ino
-
-Send a result from the Serial Monitor (or via a script):
-
-```
-18CAMS,24.451,0,1,0,2
-```
-
-This means Car `18CAMS` finished with a time of `24.451`, did **not** get FTD, achieved personal best, was not off course, and hit **2 cones**.
+![System Diagram](A_diagram_illustrates_a_wireless_finish_time_syste.png)
 
 ---
 
 ## Troubleshooting
 
-- Make sure both sender and receiver are set to the same LoRa frequency and use matching settings.
-- Check antennas are attached before transmitting.
-- Use the testdata sketch to verify your receiver is working.
+- Both sender and receiver must use the same frequency and MAGIC_WORD.
+- Attach antennas before powering.
+- Use Test Mode to verify the receiver system before connecting to real timing sources.
+
+---
