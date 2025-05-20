@@ -19,6 +19,8 @@ static SSD1306Wire  display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, R
 #define RX_TIMEOUT_VALUE                            1000
 #define BUFFER_SIZE                                 80 // Increased buffer to allow longer strings
 
+const char* MAGIC_WORD = "NHSCC";
+
 char txpacket[BUFFER_SIZE];
 
 bool lora_idle = true;
@@ -68,11 +70,14 @@ void loop()
         String inString = Serial.readStringUntil('\n');
         inString.trim(); // Remove whitespace/newline
 
-        // Check not empty, and not too long for LoRa
-        if (inString.length() > 0 && inString.length() < BUFFER_SIZE) {
-            inString.toCharArray(txpacket, BUFFER_SIZE);
+        // Make sure magic word + comma + input fits in buffer
+        int totalLen = strlen(MAGIC_WORD) + 1 + inString.length(); // +1 for comma
+        if (inString.length() > 0 && totalLen < BUFFER_SIZE) {
+            // Build the LoRa packet with magic word prepended
+            snprintf(txpacket, BUFFER_SIZE, "%s,%s", MAGIC_WORD, inString.c_str());
 
-            Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", txpacket, strlen(txpacket));
+            // Serial output does NOT show magic word
+            Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", inString.c_str(), inString.length());
 
             int idx1 = inString.indexOf(','); // first comma
             int idx2 = inString.indexOf(',', idx1 + 1); // second comma

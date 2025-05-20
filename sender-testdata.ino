@@ -17,7 +17,9 @@ static SSD1306Wire  display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, R
 #define LORA_IQ_INVERSION_ON                        false
 
 #define RX_TIMEOUT_VALUE                            1000
-#define BUFFER_SIZE                                 40 // Buffer for string
+#define BUFFER_SIZE                                 80 // Increased for magic word and data
+
+const char* MAGIC_WORD = "NHSCC"; // <-- Your magic word!
 
 char txpacket[BUFFER_SIZE];
 
@@ -27,7 +29,7 @@ static RadioEvents_t RadioEvents;
 void OnTxDone(void);
 void OnTxTimeout(void);
 
-// -------- NEW: CarID List ---------
+// -------- CarID List ---------
 const char* CarIDList[] = {
     "66EVX",
     "18CAMS",
@@ -37,10 +39,10 @@ const char* CarIDList[] = {
     "91XP"
 };
 const int CarIDListSize = sizeof(CarIDList)/sizeof(CarIDList[0]);
-// ----------------------------------
+// -----------------------------
 
 // Example data (default state)
-const char* CarID = "66EVX"; // will be set randomly each time now
+const char* CarID = "66EVX";
 float finishtime = 24.345;
 bool ftd = true;
 bool personalbest = false;
@@ -123,7 +125,7 @@ void loop()
                 offcourse = false;
                 cones = 2;
                 break;
-            case 4: // NEW: All flags false, cones=0
+            case 4: // All flags false, cones=0
                 ftd = false;
                 personalbest = false;
                 offcourse = false;
@@ -140,14 +142,16 @@ void loop()
         char ft_str[10];
         snprintf(ft_str, sizeof(ft_str), "%.3f", finishtime);
 
-        // Format the message
-        snprintf(txpacket, BUFFER_SIZE, "%s,%.3f,%d,%d,%d,%d",
+        // ----------- PREPEND MAGIC WORD ---------------
+        snprintf(txpacket, BUFFER_SIZE, "%s,%s,%.3f,%d,%d,%d,%d",
+                 MAGIC_WORD,   // <-- magic word first
                  CarID,
                  finishtime,
                  ftd ? 1 : 0,
                  personalbest ? 1 : 0,
                  offcourse ? 1 : 0,
                  cones);
+        // -----------------------------------------------
 
         Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", txpacket, strlen(txpacket));
 

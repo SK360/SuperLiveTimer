@@ -3,20 +3,22 @@
 #include "Arduino.h"
 #include "HT_SSD1306Wire.h"
 
-static SSD1306Wire  display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED); // addr , freq , i2c group , resolution , rst
+static SSD1306Wire  display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
 
 #define RF_FREQUENCY                                915000000 // Hz
 #define TX_OUTPUT_POWER                             14        // dBm
-#define LORA_BANDWIDTH                              0         // [0: 125 kHz, 1: 250 kHz, 2: 500 kHz, 3: Reserved]
-#define LORA_SPREADING_FACTOR                       7         // [SF7..SF12]
-#define LORA_CODINGRATE                             1         // [1: 4/5, 2: 4/6, 3: 4/7, 4: 4/8]
-#define LORA_PREAMBLE_LENGTH                        8         // Same for Tx and Rx
-#define LORA_SYMBOL_TIMEOUT                         0         // Symbols
+#define LORA_BANDWIDTH                              0
+#define LORA_SPREADING_FACTOR                       7
+#define LORA_CODINGRATE                             1
+#define LORA_PREAMBLE_LENGTH                        8
+#define LORA_SYMBOL_TIMEOUT                         0
 #define LORA_FIX_LENGTH_PAYLOAD_ON                  false
 #define LORA_IQ_INVERSION_ON                        false
 
 #define RX_TIMEOUT_VALUE                            1000
-#define BUFFER_SIZE                                 64 // Increased size for safety
+#define BUFFER_SIZE                                 80 // Increased size for magic word
+
+const char* MAGIC_WORD = "NHSCC"; // <-- Magic word must match sender!
 
 char txpacket[BUFFER_SIZE];
 char rxpacket[BUFFER_SIZE];
@@ -72,7 +74,7 @@ void VextON(void)
   digitalWrite(Vext, LOW);
 }
 
-void VextOFF(void) //Vext default OFF
+void VextOFF(void)
 {
   pinMode(Vext,OUTPUT);
   digitalWrite(Vext, HIGH);
@@ -83,7 +85,6 @@ void loop()
   if(lora_idle)
   {
     lora_idle = false;
-    //Serial.println("into RX mode");
     Radio.Rx(0);
   }
   Radio.IrqProcess( );
@@ -94,16 +95,37 @@ void OnRxDone( uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t snr )
     memcpy(rxpacket, payload, size );
     rxpacket[size] = '\0';
 
-    // Print raw received string to Serial
-    Serial.println(rxpacket);
+    // Check if the message starts with the magic word
+    char* token = strtok(rxpacket, ",");
+    if (token == NULL) {
+        lora_idle = true;
+        return;
+    }
 
-    // Parse CSV string
-    char *carID = strtok(rxpacket, ",");
+    if (strcmp(token, MAGIC_WORD) != 0) {
+        // Magic word does not match, ignore this packet
+        lora_idle = true;
+        return;
+    }
+
+    // From here, rxpacket's first token is the magic word, so move on to the next tokens
+    char *carID = strtok(NULL, ",");
     char *finishTime = strtok(NULL, ",");
     char *ftd = strtok(NULL, ",");
     char *personalBest = strtok(NULL, ",");
     char *offCourse = strtok(NULL, ",");
     char *cones = strtok(NULL, ",");
+
+    // Only print out valid packets (without the magic word)
+    if (carID && finishTime && ftd && personalBest && offCourse && cones) {
+        // Print the message to serial WITHOUT the magic word
+        Serial.print(carID); Serial.print(",");
+        Serial.print(finishTime); Serial.print(",");
+        Serial.print(ftd); Serial.print(",");
+        Serial.print(personalBest); Serial.print(",");
+        Serial.print(offCourse); Serial.print(",");
+        Serial.println(cones);
+    }
 
     display.clear();
     display.setFont(ArialMT_Plain_24);
