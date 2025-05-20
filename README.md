@@ -1,2 +1,2 @@
 ## FinishTime LoRa
-This does stuff
+Arduino code for Heltec v3 LoRa boards to be used with the FinishTime Autocross timing system
