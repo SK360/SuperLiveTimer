@@ -2,6 +2,7 @@
 #include "LoRaWan_APP.h"
 #include "Arduino.h"
 #include "HT_SSD1306Wire.h"
+#include "esp_sleep.h"
 
 static SSD1306Wire  display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
 
@@ -43,10 +44,18 @@ String formatCarID(const char* carID) {
 }
 // --------------------------------
 
+// USER BUTTON setup
+#define USER_BUTTON_PIN 0 // Confirm this is correct for your Heltec v3 (usually is)
+
+unsigned long buttonDownTime = 0;
+const unsigned long LONG_PRESS_DURATION = 2000; // 2 seconds
+
 void setup() {
     Serial.begin(115200);
     Mcu.begin(HELTEC_BOARD,SLOW_CLK_TPYE);
-    
+
+    pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
+
     txNumber=0;
     rssi=0;
     VextON();
@@ -58,7 +67,7 @@ void setup() {
     display.drawString(0, 0, "FinishTime");
     display.drawString(0, 20, "Waiting for Data");
     display.display();
-  
+
     RadioEvents.RxDone = OnRxDone;
     Radio.Init( &RadioEvents );
     Radio.SetChannel( RF_FREQUENCY );
@@ -80,14 +89,37 @@ void VextOFF(void)
   digitalWrite(Vext, HIGH);
 }
 
+void goToSleep() {
+    display.clear();
+    display.setFont(ArialMT_Plain_16);
+    display.drawString(0, 20, "Sleeping...");
+    display.display();
+    delay(1000);
+
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)USER_BUTTON_PIN, 0); // Wake on LOW
+    VextOFF(); // Optional: turn off external power (saves more)
+    esp_deep_sleep_start();
+}
+
 void loop()
 {
-  if(lora_idle)
-  {
-    lora_idle = false;
-    Radio.Rx(0);
-  }
-  Radio.IrqProcess( );
+    // --- Long Press Detection for Power Down ---
+    if (digitalRead(USER_BUTTON_PIN) == LOW) { // button pressed (active low)
+        if (buttonDownTime == 0) buttonDownTime = millis();
+        if ((millis() - buttonDownTime) > LONG_PRESS_DURATION) {
+            goToSleep();
+        }
+    } else {
+        buttonDownTime = 0;
+    }
+
+    // --- Existing LoRa Logic ---
+    if(lora_idle)
+    {
+        lora_idle = false;
+        Radio.Rx(0);
+    }
+    Radio.IrqProcess();
 }
 
 void OnRxDone( uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t snr )
