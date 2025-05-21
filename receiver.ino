@@ -46,7 +46,7 @@ DisplayMode currentMode = RACE_MODE;
 
 // Ignore early button state after boot
 unsigned long startupTime = 0;
-unsigned long startupIgnoreTime = 3000; // Increased to 3s to avoid false triggers
+unsigned long startupIgnoreTime = 3000;
 
 // Format Car ID
 String formatCarID(const char* carID) {
@@ -79,7 +79,7 @@ void goToSleep() {
     display.display();
     delay(1000);
 
-    esp_sleep_enable_ext0_wakeup((gpio_num_t)USER_BUTTON_PIN, 0); // Wake on LOW
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)USER_BUTTON_PIN, 0);
     VextOFF();
     esp_deep_sleep_start();
 }
@@ -115,7 +115,6 @@ void setup() {
 
 // Main Loop
 void loop() {
-    // Ignore button press during early startup
     if (millis() - startupTime < startupIgnoreTime) {
         if (lora_idle) {
             lora_idle = false;
@@ -128,7 +127,6 @@ void loop() {
     bool buttonPressed = digitalRead(USER_BUTTON_PIN) == LOW;
     unsigned long now = millis();
 
-    // Button press logic
     if (lastButtonState != buttonPressed) {
         lastButtonState = buttonPressed;
 
@@ -138,9 +136,7 @@ void loop() {
         } else {
             unsigned long pressDuration = now - buttonPressStartTime;
             if (!buttonHeld && pressDuration < LONG_PRESS_DURATION) {
-                // Toggle mode
                 currentMode = (currentMode == RACE_MODE) ? DIAGNOSTICS_MODE : RACE_MODE;
-
                 display.clear();
                 display.setFont(ArialMT_Plain_16);
                 display.drawString(0, 20, currentMode == DIAGNOSTICS_MODE ? "Diagnostics On" : "Race Mode");
@@ -150,7 +146,6 @@ void loop() {
         }
     }
 
-    // Long press = sleep
     if (buttonPressed && !buttonHeld && (now - buttonPressStartTime > LONG_PRESS_DURATION)) {
         buttonHeld = true;
         goToSleep();
@@ -173,7 +168,6 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
     snr = packetSnr;
     packetCount++;
 
-    // Parse and validate packet
     char* token = strtok(rxpacket, ",");
     if (token == NULL || strcmp(token, MAGIC_WORD) != 0) {
         lora_idle = true;
@@ -187,7 +181,6 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
     char *offCourse = strtok(NULL, ",");
     char *cones = strtok(NULL, ",");
 
-    // ✅ Always print to Serial
     if (carID && finishTime && ftd && personalBest && offCourse && cones) {
         Serial.print(carID); Serial.print(",");
         Serial.print(finishTime); Serial.print(",");
@@ -197,7 +190,6 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
         Serial.println(cones);
     }
 
-    // === Display ===
     display.clear();
 
     if (currentMode == DIAGNOSTICS_MODE) {
@@ -212,33 +204,61 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
         return;
     }
 
-    // Race mode display
     display.setFont(ArialMT_Plain_24);
-    if (carID != NULL) {
-        display.drawString(0, 0, formatCarID(carID));
-    }
+    if (carID) display.drawString(0, 0, formatCarID(carID));
 
-    if (finishTime != NULL) {
+    if (finishTime) {
         String finishDisplay = String(finishTime);
-        if (cones != NULL && atoi(cones) != 0) {
+        if (cones && atoi(cones) != 0) {
             finishDisplay += " +" + String(atoi(cones));
         }
         display.drawString(0, 20, finishDisplay);
     }
 
-    String statusMsg = "";
-    if (offCourse != NULL && atoi(offCourse)) {
-        statusMsg = "Off Course";
-    } else if (ftd != NULL && atoi(ftd)) {
-        statusMsg = "FTD!";
-    } else if (personalBest != NULL && atoi(personalBest)) {
-        statusMsg = "PB";
+    if (offCourse && atoi(offCourse)) {
+        display.drawString(0, 40, "Off Course");
+        display.display();
+    } else if (ftd && atoi(ftd)) {
+        // FTD animation: scroll right and back to left
+        display.setFont(ArialMT_Plain_24);
+        int textWidth = display.getStringWidth("FTD!");
+        int maxX = 128 - textWidth;
+
+        for (int x = 0; x <= maxX; x += 6) {
+            display.clear();
+            if (carID) display.drawString(0, 0, formatCarID(carID));
+            if (finishTime) {
+                String finishDisplay = String(finishTime);
+                if (cones && atoi(cones) != 0) {
+                    finishDisplay += " +" + String(atoi(cones));
+                }
+                display.drawString(0, 20, finishDisplay);
+            }
+            display.drawString(x, 40, "FTD!");
+            display.display();
+            delay(60);
+        }
+
+        for (int x = maxX; x >= 0; x -= 6) {
+            display.clear();
+            if (carID) display.drawString(0, 0, formatCarID(carID));
+            if (finishTime) {
+                String finishDisplay = String(finishTime);
+                if (cones && atoi(cones) != 0) {
+                    finishDisplay += " +" + String(atoi(cones));
+                }
+                display.drawString(0, 20, finishDisplay);
+            }
+            display.drawString(x, 40, "FTD!");
+            display.display();
+            delay(60);
+        }
+    } else if (personalBest && atoi(personalBest)) {
+        display.drawString(0, 40, "PB");
+        display.display();
+    } else {
+        display.display();
     }
 
-    if (statusMsg.length() > 0) {
-        display.drawString(0, 40, statusMsg);
-    }
-
-    display.display();
     lora_idle = true;
 }
