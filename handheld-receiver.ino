@@ -26,8 +26,10 @@ static SSD1306Wire display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RS
 #define RX_TIMEOUT_VALUE            1000
 #define BUFFER_SIZE                 80
 
-const char* MAGIC_WORD = "NHSCC";
+// Default magic word if none saved
+String magicWord = "NHSCC";
 
+// Other globals
 char txpacket[BUFFER_SIZE];
 char rxpacket[BUFFER_SIZE];
 
@@ -63,7 +65,7 @@ const char* ap_ssid = "SuperLiveTimer-Setup";
 const char* ap_password = "12345678";
 WebServer server(80);
 
-// Persistent storage for filter
+// Persistent storage for filter and magic word
 Preferences prefs;
 
 // Filter for Car ID (empty = show all)
@@ -112,11 +114,16 @@ String htmlPage() {
   page += "<h2>NHSCC Super Live Timer Config</h2>";
   page += "<form action='/save' method='POST'>";
   page += "Car ID filter (show only results for this ID):<br>";
-  page += "<input type='text' name='carid' value='" + filteredCarID + "'><br>";
+  page += "<input type='text' name='carid' value='" + filteredCarID + "'><br><br>";
+  page += "Magic Word:<br>";
+  page += "<input type='text' name='magicword' value='" + magicWord + "'><br>";
   page += "<input type='submit' value='Save'>";
   page += "</form>";
   page += "<p>Current filter: <b>";
   page += (filteredCarID.length() ? filteredCarID : "None");
+  page += "</b></p>";
+  page += "<p>Current Magic Word: <b>";
+  page += magicWord;
   page += "</b></p>";
   page += "<form action='/clear' method='POST'><input type='submit' value='Show All Cars'></form>";
   page += "</body></html>";
@@ -128,21 +135,33 @@ void handleRoot() {
 }
 
 void handleSave() {
+  bool changed = false;
   if (server.hasArg("carid")) {
     filteredCarID = server.arg("carid");
     filteredCarID.trim(); // Remove whitespace
     Serial.println("Set CarID filter to: " + filteredCarID);
     prefs.putString("carid", filteredCarID); // Save to NVS!
+    changed = true;
+  }
+  if (server.hasArg("magicword")) {
+    magicWord = server.arg("magicword");
+    magicWord.trim();
+    if (magicWord.length() == 0) magicWord = "NHSCC";
+    Serial.println("Set Magic Word to: " + magicWord);
+    prefs.putString("magicword", magicWord);
+    changed = true;
+  }
+  if (changed) {
     server.sendHeader("Location", "/");
     server.send(303); // Redirect back to root
   } else {
-    server.send(400, "text/html", "Missing carid!");
+    server.send(400, "text/html", "Missing carid or magicword!");
   }
 }
 
 void handleClear() {
   filteredCarID = "";
-  prefs.putString("carid", ""); // Clear in NVS!
+  prefs.putString("carid", "");
   server.sendHeader("Location", "/");
   server.send(303);
 }
@@ -188,7 +207,7 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
     packetCount++;
 
     char* token = strtok(rxpacket, ",");
-    if (token == NULL || strcmp(token, MAGIC_WORD) != 0) {
+    if (token == NULL || strcmp(token, magicWord.c_str()) != 0) {
         lora_idle = true;
         return;
     }
@@ -311,9 +330,11 @@ void setup() {
     display.init();
     display.setFont(ArialMT_Plain_16);
 
-    // --- Load CarID Filter from NVS ---
-    prefs.begin("supertimer", false); // Open Preferences namespace
+    // --- Load CarID Filter & Magic Word from NVS ---
+    prefs.begin("supertimer", false);
     filteredCarID = prefs.getString("carid", "");
+    magicWord = prefs.getString("magicword", "NHSCC");
+    if (magicWord.length() == 0) magicWord = "NHSCC"; // Safety
 
     display.drawString(0, 0, "FinishTime");
     display.drawString(0, 20, "Waiting for Data");
