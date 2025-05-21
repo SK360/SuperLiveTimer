@@ -6,20 +6,22 @@
 
 static SSD1306Wire display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
 
-#define RF_FREQUENCY                                915000000 // Hz
-#define TX_OUTPUT_POWER                             14        // dBm
-#define LORA_BANDWIDTH                              0
-#define LORA_SPREADING_FACTOR                       7
-#define LORA_CODINGRATE                             1
-#define LORA_PREAMBLE_LENGTH                        8
-#define LORA_SYMBOL_TIMEOUT                         0
-#define LORA_FIX_LENGTH_PAYLOAD_ON                  false
-#define LORA_IQ_INVERSION_ON                        false
+// LoRa Configuration
+#define RF_FREQUENCY                915000000 // Hz
+#define TX_OUTPUT_POWER             14        // dBm
+#define LORA_BANDWIDTH              0
+#define LORA_SPREADING_FACTOR       7
+#define LORA_CODINGRATE             1
+#define LORA_PREAMBLE_LENGTH        8
+#define LORA_SYMBOL_TIMEOUT         0
+#define LORA_FIX_LENGTH_PAYLOAD_ON false
+#define LORA_IQ_INVERSION_ON        false
 
-#define RX_TIMEOUT_VALUE                            1000
-#define BUFFER_SIZE                                 80
+#define RX_TIMEOUT_VALUE            1000
+#define BUFFER_SIZE                 80
 
 const char* MAGIC_WORD = "NHSCC";
+
 char txpacket[BUFFER_SIZE];
 char rxpacket[BUFFER_SIZE];
 
@@ -29,21 +31,24 @@ int16_t txNumber;
 int16_t rssi, rxSize;
 int8_t snr;
 int packetCount = 0;
+
 bool lora_idle = true;
 
+// Button and Mode Management
 #define USER_BUTTON_PIN 0
 const unsigned long LONG_PRESS_DURATION = 2000;
+unsigned long buttonPressStartTime = 0;
+bool buttonHeld = false;
+bool lastButtonState = HIGH;
 
 enum DisplayMode { RACE_MODE, DIAGNOSTICS_MODE };
 DisplayMode currentMode = RACE_MODE;
 
-bool lastButtonState = HIGH;
-unsigned long buttonPressStartTime = 0;
-bool buttonHeld = false;
-
-unsigned long startupIgnoreTime = 3000;
+// Ignore early button state after boot
 unsigned long startupTime = 0;
+unsigned long startupIgnoreTime = 3000; // Increased to 3s to avoid false triggers
 
+// Format Car ID
 String formatCarID(const char* carID) {
     String id(carID);
     for (unsigned int i = 0; i < id.length(); i++) {
@@ -55,6 +60,7 @@ String formatCarID(const char* carID) {
     return id;
 }
 
+// OLED Power Control
 void VextON(void) {
     pinMode(Vext, OUTPUT);
     digitalWrite(Vext, LOW);
@@ -65,6 +71,7 @@ void VextOFF(void) {
     digitalWrite(Vext, HIGH);
 }
 
+// Deep Sleep
 void goToSleep() {
     display.clear();
     display.setFont(ArialMT_Plain_16);
@@ -72,11 +79,12 @@ void goToSleep() {
     display.display();
     delay(1000);
 
-    esp_sleep_enable_ext0_wakeup((gpio_num_t)USER_BUTTON_PIN, 0);
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)USER_BUTTON_PIN, 0); // Wake on LOW
     VextOFF();
     esp_deep_sleep_start();
 }
 
+// Setup
 void setup() {
     Serial.begin(115200);
     currentMode = RACE_MODE;
@@ -105,8 +113,9 @@ void setup() {
                       0, true, 0, 0, LORA_IQ_INVERSION_ON, true);
 }
 
+// Main Loop
 void loop() {
-    // Ignore button during initial boot
+    // Ignore button press during early startup
     if (millis() - startupTime < startupIgnoreTime) {
         if (lora_idle) {
             lora_idle = false;
@@ -119,7 +128,7 @@ void loop() {
     bool buttonPressed = digitalRead(USER_BUTTON_PIN) == LOW;
     unsigned long now = millis();
 
-    // Detect button press change
+    // Button press logic
     if (lastButtonState != buttonPressed) {
         lastButtonState = buttonPressed;
 
@@ -129,7 +138,7 @@ void loop() {
         } else {
             unsigned long pressDuration = now - buttonPressStartTime;
             if (!buttonHeld && pressDuration < LONG_PRESS_DURATION) {
-                // Short press: toggle mode
+                // Toggle mode
                 currentMode = (currentMode == RACE_MODE) ? DIAGNOSTICS_MODE : RACE_MODE;
 
                 display.clear();
@@ -141,7 +150,7 @@ void loop() {
         }
     }
 
-    // Long press for sleep
+    // Long press = sleep
     if (buttonPressed && !buttonHeld && (now - buttonPressStartTime > LONG_PRESS_DURATION)) {
         buttonHeld = true;
         goToSleep();
@@ -155,6 +164,7 @@ void loop() {
     Radio.IrqProcess();
 }
 
+// LoRa Receive Handler
 void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packetSnr) {
     memcpy(rxpacket, payload, size);
     rxpacket[size] = '\0';
@@ -163,20 +173,7 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
     snr = packetSnr;
     packetCount++;
 
-    display.clear();
-    display.setFont(ArialMT_Plain_16);
-
-    if (currentMode == DIAGNOSTICS_MODE) {
-        display.drawString(0, 0, "Diagnostics Mode");
-        display.drawString(0, 20, "RSSI: " + String(rssi) + " dBm");
-        display.drawString(0, 36, "SNR: " + String(snr) + " dB");
-        display.setFont(ArialMT_Plain_10);
-        display.drawString(0, 52, "Size: " + String(size) + "  Packets: " + String(packetCount));
-        display.display();
-        lora_idle = true;
-        return;
-    }
-
+    // Parse and validate packet
     char* token = strtok(rxpacket, ",");
     if (token == NULL || strcmp(token, MAGIC_WORD) != 0) {
         lora_idle = true;
@@ -190,6 +187,7 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
     char *offCourse = strtok(NULL, ",");
     char *cones = strtok(NULL, ",");
 
+    // ✅ Always print to Serial
     if (carID && finishTime && ftd && personalBest && offCourse && cones) {
         Serial.print(carID); Serial.print(",");
         Serial.print(finishTime); Serial.print(",");
@@ -199,6 +197,22 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
         Serial.println(cones);
     }
 
+    // === Display ===
+    display.clear();
+
+    if (currentMode == DIAGNOSTICS_MODE) {
+        display.setFont(ArialMT_Plain_16);
+        display.drawString(0, 0, "Diagnostics Mode");
+        display.drawString(0, 20, "RSSI: " + String(rssi) + " dBm");
+        display.drawString(0, 36, "SNR: " + String(snr) + " dB");
+        display.setFont(ArialMT_Plain_10);
+        display.drawString(0, 52, "Size: " + String(size) + "  Packets: " + String(packetCount));
+        display.display();
+        lora_idle = true;
+        return;
+    }
+
+    // Race mode display
     display.setFont(ArialMT_Plain_24);
     if (carID != NULL) {
         display.drawString(0, 0, formatCarID(carID));
