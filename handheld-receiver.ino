@@ -5,31 +5,36 @@
 #include "esp_sleep.h"
 #include <WiFi.h>
 #include <WebServer.h>
-#include <Preferences.h> // For persistent storage
+#include <Preferences.h>
 
-#define WIFI_LED_PIN 35 // Heltec V3 onboard white LED is on GPIO 35
+#define WIFI_LED_PIN 35
 
-// --- OLED + LoRa ---
 static SSD1306Wire display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
 
-// LoRa Configuration
-#define RF_FREQUENCY                915000000 // Hz
-#define TX_OUTPUT_POWER             14        // dBm
-#define LORA_BANDWIDTH              0
-#define LORA_SPREADING_FACTOR       7
-#define LORA_CODINGRATE             1
-#define LORA_PREAMBLE_LENGTH        8
-#define LORA_SYMBOL_TIMEOUT         0
+// LoRa
+#define RF_FREQUENCY 915000000
+#define TX_OUTPUT_POWER 14
+#define LORA_BANDWIDTH 0
+#define LORA_SPREADING_FACTOR 7
+#define LORA_CODINGRATE 1
+#define LORA_PREAMBLE_LENGTH 8
+#define LORA_SYMBOL_TIMEOUT 0
 #define LORA_FIX_LENGTH_PAYLOAD_ON false
-#define LORA_IQ_INVERSION_ON        false
+#define LORA_IQ_INVERSION_ON false
+#define RX_TIMEOUT_VALUE 1000
+#define BUFFER_SIZE 80
 
-#define RX_TIMEOUT_VALUE            1000
-#define BUFFER_SIZE                 80
-
-// Default magic word if none saved
 String magicWord = "NHSCC";
+String myCarID = "";
+String myClass = "";
 
-// Other globals
+enum FilterMode {
+  FILTER_ALL,
+  FILTER_MY_CAR,
+  FILTER_MY_CLASS
+};
+FilterMode filterMode = FILTER_ALL;
+
 char txpacket[BUFFER_SIZE];
 char rxpacket[BUFFER_SIZE];
 
@@ -42,36 +47,27 @@ int packetCount = 0;
 
 bool lora_idle = true;
 
-// Button and Mode Management
 #define USER_BUTTON_PIN 0
-const unsigned long WIFI_HOLD_DURATION = 5000;     // 5 seconds
-const unsigned long SLEEP_HOLD_DURATION = 10000;   // 10 seconds
+const unsigned long WIFI_HOLD_DURATION = 5000;
+const unsigned long SLEEP_HOLD_DURATION = 10000;
 unsigned long buttonPressStartTime = 0;
 bool buttonHeld = false;
 bool wifiArmed = false;
 bool lastButtonState = HIGH;
-bool wifiEnabled = false;  // WiFi/AP is disabled by default
-bool startupIgnoreActive = true; // Track if in the startup ignore period
+bool wifiEnabled = false;
+bool startupIgnoreActive = true;
+bool diagnosticsMode = false;
 
-enum DisplayMode { RACE_MODE, DIAGNOSTICS_MODE };
-DisplayMode currentMode = RACE_MODE;
-
-// Ignore button state after boot
 unsigned long startupTime = 0;
-unsigned long startupIgnoreTime = 5000; // 5 seconds
+unsigned long startupIgnoreTime = 5000;
 
-// --- WiFi + Web ---
 const char* ap_ssid = "SuperLiveTimer-Setup";
 const char* ap_password = "12345678";
 WebServer server(80);
 
-// Persistent storage for filter and magic word
 Preferences prefs;
 
-// Filter for Car ID (empty = show all)
-String filteredCarID = "";
-
-// Helper: Format Car ID for OLED
+// Helpers
 String formatCarID(const char* carID) {
     String id(carID);
     for (unsigned int i = 0; i < id.length(); i++) {
@@ -83,25 +79,24 @@ String formatCarID(const char* carID) {
     return id;
 }
 
-// OLED Power Control
-void VextON(void) {
-    pinMode(Vext, OUTPUT);
-    digitalWrite(Vext, LOW);
+String extractClass(const String& carid) {
+    for (unsigned int i = 0; i < carid.length(); i++) {
+        if (isalpha(carid[i])) {
+            return carid.substring(i);
+        }
+    }
+    return "";
 }
 
-void VextOFF(void) {
-    pinMode(Vext, OUTPUT);
-    digitalWrite(Vext, HIGH);
-}
+void VextON(void) { pinMode(Vext, OUTPUT); digitalWrite(Vext, LOW);}
+void VextOFF(void) { pinMode(Vext, OUTPUT); digitalWrite(Vext, HIGH);}
 
-// Deep Sleep
 void goToSleep() {
     display.clear();
     display.setFont(ArialMT_Plain_16);
     display.drawString(0, 20, "Sleeping...");
     display.display();
     delay(1000);
-
     esp_sleep_enable_ext0_wakeup((gpio_num_t)USER_BUTTON_PIN, 0);
     VextOFF();
     esp_deep_sleep_start();
@@ -113,19 +108,30 @@ String htmlPage() {
   String page = "<!DOCTYPE HTML><html><head><title>NHSCC Super Live Timer Config</title><meta name='viewport' content='width=device-width, initial-scale=1'></head><body>";
   page += "<h2>NHSCC Super Live Timer Config</h2>";
   page += "<form action='/save' method='POST'>";
-  page += "Car ID filter (show only results for this ID):<br>";
-  page += "<input type='text' name='carid' value='" + filteredCarID + "'><br><br>";
+  page += "My Car ID (for filtering):<br>";
+  page += "<input type='text' name='mycarid' value='" + myCarID + "'><br><br>";
   page += "Magic Word:<br>";
-  page += "<input type='text' name='magicword' value='" + magicWord + "'><br>";
+  page += "<input type='text' name='magicword' value='" + magicWord + "'><br><br>";
+  page += "<input type='checkbox' id='diagnostics' name='diagnostics' value='on'";
+  if (diagnosticsMode) page += " checked";
+  page += "> <label for='diagnostics'>Enable Diagnostics Mode</label><br><br>";
   page += "<input type='submit' value='Save'>";
   page += "</form>";
   page += "<p>Current filter: <b>";
-  page += (filteredCarID.length() ? filteredCarID : "None");
+  if (filterMode == FILTER_MY_CAR && myCarID.length() > 0)
+    page += myCarID;
+  else if (filterMode == FILTER_MY_CLASS && myClass.length() > 0)
+    page += myClass;
+  else
+    page += "None";
   page += "</b></p>";
   page += "<p>Current Magic Word: <b>";
   page += magicWord;
   page += "</b></p>";
-  page += "<form action='/clear' method='POST'><input type='submit' value='Show All Cars'></form>";
+  page += "<p>Diagnostics Mode: <b>";
+  page += (diagnosticsMode ? "Enabled" : "Disabled");
+  page += "</b></p>";
+  // No "Show All Cars" button here!
   page += "</body></html>";
   return page;
 }
@@ -135,33 +141,28 @@ void handleRoot() {
 }
 
 void handleSave() {
-  bool changed = false;
-  if (server.hasArg("carid")) {
-    filteredCarID = server.arg("carid");
-    filteredCarID.trim(); // Remove whitespace
-    Serial.println("Set CarID filter to: " + filteredCarID);
-    prefs.putString("carid", filteredCarID); // Save to NVS!
-    changed = true;
+  if (server.hasArg("mycarid")) {
+    myCarID = server.arg("mycarid");
+    myCarID.trim();
+    myClass = extractClass(myCarID);
+    prefs.putString("mycarid", myCarID);
+    prefs.putString("myclass", myClass);
   }
   if (server.hasArg("magicword")) {
     magicWord = server.arg("magicword");
     magicWord.trim();
     if (magicWord.length() == 0) magicWord = "NHSCC";
-    Serial.println("Set Magic Word to: " + magicWord);
     prefs.putString("magicword", magicWord);
-    changed = true;
   }
-  if (changed) {
-    server.sendHeader("Location", "/");
-    server.send(303); // Redirect back to root
-  } else {
-    server.send(400, "text/html", "Missing carid or magicword!");
-  }
-}
+  diagnosticsMode = server.hasArg("diagnostics");
+  prefs.putBool("diagnostics", diagnosticsMode);
 
-void handleClear() {
-  filteredCarID = "";
-  prefs.putString("carid", "");
+  // Always reset to show all cars on config change
+  filterMode = FILTER_ALL;
+  prefs.putUChar("filtermode", filterMode);
+
+  showStartupOLED();
+
   server.sendHeader("Location", "/");
   server.send(303);
 }
@@ -174,10 +175,9 @@ void startWiFiAP() {
 
   server.on("/", handleRoot);
   server.on("/save", HTTP_POST, handleSave);
-  server.on("/clear", HTTP_POST, handleClear);
   server.begin();
   wifiEnabled = true;
-  digitalWrite(WIFI_LED_PIN, HIGH); // LED ON when WiFi ON
+  digitalWrite(WIFI_LED_PIN, HIGH);
   display.clear();
   display.setFont(ArialMT_Plain_16);
   display.drawString(0, 20, "WiFi AP Enabled");
@@ -189,12 +189,29 @@ void stopWiFiAP() {
   server.stop();
   WiFi.softAPdisconnect(true);
   wifiEnabled = false;
-  digitalWrite(WIFI_LED_PIN, LOW); // LED OFF when WiFi OFF
+  digitalWrite(WIFI_LED_PIN, LOW);
   display.clear();
   display.setFont(ArialMT_Plain_16);
   display.drawString(0, 20, "WiFi AP Disabled");
   display.display();
   delay(1000);
+}
+
+// OLED startup status -- uses your preferred font and Y=40
+void showStartupOLED() {
+  display.clear();
+  display.setFont(ArialMT_Plain_16);
+  display.drawString(0, 0, "FinishTime");
+  display.drawString(0, 20, "Waiting for Data");
+  display.setFont(ArialMT_Plain_16);
+  if (filterMode == FILTER_MY_CAR && myCarID.length() > 0) {
+    display.drawString(0, 40, "Filter: " + myCarID);
+  } else if (filterMode == FILTER_MY_CLASS && myClass.length() > 0) {
+    display.drawString(0, 40, "Filter: " + myClass);
+  } else {
+    display.drawString(0, 40, "Filter: None");
+  }
+  display.display();
 }
 
 // --- LoRa Receive Handler ---
@@ -219,12 +236,15 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
     char *offCourse = strtok(NULL, ",");
     char *cones = strtok(NULL, ",");
 
-    // Filter by Car ID
     bool showThisPacket = true;
-    if (filteredCarID.length() > 0 && carID) {
-      String rxCar = String(carID);
-      rxCar.trim();
-      showThisPacket = rxCar.equalsIgnoreCase(filteredCarID);
+    String rxCar = carID ? String(carID) : "";
+    rxCar.trim();
+
+    if (filterMode == FILTER_MY_CAR && myCarID.length() > 0) {
+      showThisPacket = rxCar.equalsIgnoreCase(myCarID);
+    } else if (filterMode == FILTER_MY_CLASS && myClass.length() > 0) {
+      String rxClass = extractClass(rxCar);
+      showThisPacket = (rxClass.equalsIgnoreCase(myClass));
     }
 
     if (carID && finishTime && ftd && personalBest && offCourse && cones && showThisPacket) {
@@ -237,7 +257,7 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
 
         display.clear();
 
-        if (currentMode == DIAGNOSTICS_MODE) {
+        if (diagnosticsMode) {
             display.setFont(ArialMT_Plain_16);
             display.drawString(0, 0, "Diagnostics Mode");
             display.drawString(0, 20, "RSSI: " + String(rssi) + " dBm");
@@ -264,11 +284,9 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
             display.drawString(0, 40, "Off Course");
             display.display();
         } else if (ftd && atoi(ftd)) {
-            // FTD animation: scroll right and back to left
             display.setFont(ArialMT_Plain_24);
             int textWidth = display.getStringWidth("FTD!");
             int maxX = 128 - textWidth;
-
             for (int x = 0; x <= maxX; x += 6) {
                 display.clear();
                 if (carID) display.drawString(0, 0, formatCarID(carID));
@@ -283,7 +301,6 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
                 display.display();
                 delay(60);
             }
-
             for (int x = maxX; x >= 0; x -= 6) {
                 display.clear();
                 if (carID) display.drawString(0, 0, formatCarID(carID));
@@ -304,50 +321,35 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
         } else {
             display.display();
         }
-    } else {
-        if (carID && !showThisPacket) {
-            Serial.println("Filtered out packet for CarID: " + String(carID));
-        }
     }
 
     lora_idle = true;
 }
 
-// --- Setup ---
 void setup() {
     Serial.begin(115200);
-    currentMode = RACE_MODE;
-
     Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);
     pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
 
     startupTime = millis();
-
     txNumber = 0;
     rssi = 0;
     VextON();
     delay(100);
     display.init();
-    display.setFont(ArialMT_Plain_16);
+    pinMode(WIFI_LED_PIN, OUTPUT);
+    digitalWrite(WIFI_LED_PIN, LOW);
 
-    // --- Load CarID Filter & Magic Word from NVS ---
+    // Load settings
     prefs.begin("supertimer", false);
-    filteredCarID = prefs.getString("carid", "");
+    myCarID = prefs.getString("mycarid", "");
+    myClass = prefs.getString("myclass", extractClass(myCarID));
     magicWord = prefs.getString("magicword", "NHSCC");
-    if (magicWord.length() == 0) magicWord = "NHSCC"; // Safety
+    if (magicWord.length() == 0) magicWord = "NHSCC";
+    diagnosticsMode = prefs.getBool("diagnostics", false);
+    filterMode = (FilterMode)prefs.getUChar("filtermode", 0);
 
-    display.drawString(0, 0, "FinishTime");
-    display.drawString(0, 20, "Waiting for Data");
-
-    if (filteredCarID.length() > 0) {
-      display.setFont(ArialMT_Plain_10);
-      display.drawString(0, 44, "Filter: " + filteredCarID);
-    }
-
-    display.display();
-
-    pinMode(WIFI_LED_PIN, OUTPUT);      // White LED as output
-    digitalWrite(WIFI_LED_PIN, LOW);    // Ensure LED is OFF at boot
+    showStartupOLED();
 
     RadioEvents.RxDone = OnRxDone;
     Radio.Init(&RadioEvents);
@@ -358,16 +360,14 @@ void setup() {
                       0, true, 0, 0, LORA_IQ_INVERSION_ON, true);
 
     wifiEnabled = false;
-    startupIgnoreActive = true; // Activate ignore at boot
+    startupIgnoreActive = true;
 }
 
-// --- Main Loop ---
 void loop() {
     if (wifiEnabled) server.handleClient();
 
     unsigned long now = millis();
 
-    // Handle startup ignore period
     if (startupIgnoreActive) {
         if (now - startupTime < startupIgnoreTime) {
             if (lora_idle) {
@@ -377,10 +377,8 @@ void loop() {
             Radio.IrqProcess();
             return;
         } else {
-            // Just leaving the ignore period: sync the lastButtonState
             lastButtonState = digitalRead(USER_BUTTON_PIN);
             startupIgnoreActive = false;
-            // Don't run any button logic this loop
             if (lora_idle) {
                 lora_idle = false;
                 Radio.Rx(0);
@@ -390,19 +388,16 @@ void loop() {
         }
     }
 
-    // ---- Button and WiFi logic below only runs after 5 sec ----
     bool buttonPressed = digitalRead(USER_BUTTON_PIN) == LOW;
 
     if (lastButtonState != buttonPressed) {
         lastButtonState = buttonPressed;
-
         if (buttonPressed) {
             buttonPressStartTime = now;
             buttonHeld = false;
             wifiArmed = false;
         } else {
             unsigned long pressDuration = now - buttonPressStartTime;
-            // Released during WiFi arm window
             if (!buttonHeld && wifiArmed && pressDuration >= WIFI_HOLD_DURATION && pressDuration < SLEEP_HOLD_DURATION) {
                 if (!wifiEnabled) {
                     startWiFiAP();
@@ -411,21 +406,17 @@ void loop() {
                 }
                 wifiArmed = false;
             }
-            // Released too soon: treat as normal short press (toggle display mode)
+            // Released too soon: cycle filter mode (all/my car/my class)
             else if (!buttonHeld && pressDuration < WIFI_HOLD_DURATION) {
-                currentMode = (currentMode == RACE_MODE) ? DIAGNOSTICS_MODE : RACE_MODE;
-                display.clear();
-                display.setFont(ArialMT_Plain_16);
-                display.drawString(0, 20, currentMode == DIAGNOSTICS_MODE ? "Diagnostics On" : "Race Mode");
-                display.display();
-                delay(500);
+                filterMode = (FilterMode)((filterMode + 1) % 3);
+                prefs.putUChar("filtermode", filterMode);
+                showStartupOLED();
             }
         }
     }
 
     if (buttonPressed && !buttonHeld) {
         unsigned long heldTime = now - buttonPressStartTime;
-        // At 5 seconds: show message
         if (heldTime >= WIFI_HOLD_DURATION && heldTime < SLEEP_HOLD_DURATION && !wifiArmed) {
             wifiArmed = true;
             display.clear();
@@ -439,7 +430,6 @@ void loop() {
             }
             display.display();
         }
-        // At 10 seconds: go to sleep (WiFi state doesn't change)
         else if (heldTime >= SLEEP_HOLD_DURATION) {
             buttonHeld = true;
             goToSleep();
