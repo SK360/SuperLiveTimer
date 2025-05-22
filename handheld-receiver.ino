@@ -116,7 +116,7 @@ int packetCount = 0;
 void showStartupOLED() {
     display.clear();
     display.setFont(ArialMT_Plain_16);
-    display.drawString(0, 0, "FinishTime");
+    display.drawString(0, 0, "SuperLiveTimer");
     display.drawString(0, 20, "Waiting for Data");
     display.setFont(ArialMT_Plain_16);
     if (settings.filterMode == FilterMode::MyCar && settings.carId.length() > 0) {
@@ -358,6 +358,16 @@ void setup() {
 
     prefs.begin("supertimer", false);
     settings.load(prefs);
+
+    // Show version number at boot
+    display.clear();
+    display.setFont(ArialMT_Plain_16);
+    display.drawString(0, 0, "SuperLiveTimer");
+    display.setFont(ArialMT_Plain_10);
+    display.drawString(0, 24, "Firmware:");
+    display.drawString(0, 38, FIRMWARE_VERSION);
+    display.display();
+    delay(1500);
 
     showStartupOLED();
 
