@@ -41,7 +41,7 @@ bool holdHandled = false;
 
 // For test mode
 const char* CarIDList[] = {
-    "66EVX", "18CAMS", "83SS", "88ES", "49GST", "91XP"
+    "66EVX", "87EVX", "41EVX", "18CAMS", "127CAMS", "5CAMS", "83SS", "88ES", "49GST", "91XP", "9SSP", "77EST"
 };
 const int CarIDListSize = sizeof(CarIDList)/sizeof(CarIDList[0]);
 const char* CarID = "66EVX";
