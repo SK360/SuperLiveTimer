@@ -33,22 +33,66 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t rssi_, int8_t snr_) {
   memcpy(rxpacket, payload, size);
   rxpacket[size] = '\0';
 
-  Serial.printf("Received packet: %s\n", rxpacket);
+  // Strip the MagicWord
+  char* data = rxpacket;
+  char* firstComma = strchr(data, ',');
+  if (firstComma != nullptr) {
+    data = firstComma + 1;
+  }
+
+  // Tokenize and extract fields
+  char* tokens[7] = { nullptr };
+  int i = 0;
+  char* token = strtok(data, ",");
+  while (token != nullptr && i < 7) {
+    tokens[i++] = token;
+    token = strtok(nullptr, ",");
+  }
+
+  if (i < 6) {
+    Serial.println("Malformed data received.");
+    return;
+  }
+
+  const char* carId = tokens[0];
+  const char* elapsedTime = tokens[1];
+  const char* ftd = tokens[2];
+  const char* personalBest = tokens[3];
+  const char* offCourse = tokens[4];
+  const char* cones = tokens[5];
+
+  // Determine status with priority: Off Course > FTD > Personal Best
+  const char* status = "";
+  if (strcmp(offCourse, "1") == 0) {
+    status = "Off Course";
+  } else if (strcmp(ftd, "1") == 0) {
+    status = "FTD";
+  } else if (strcmp(personalBest, "1") == 0) {
+    status = "Personal Best";
+  }
+
+  // Build time line without "sec" and with optional cone penalty
+  String timeLine = String("Time: ") + elapsedTime;
+  int coneCount = atoi(cones);
+  if (coneCount > 0) {
+    timeLine += " +" + String(coneCount);
+  }
+
+  Serial.printf("CarID: %s, Time: %s, Cones: %d, Status: %s\n", carId, elapsedTime, coneCount, status);
   Serial.printf("RSSI: %d, SNR: %d\n", rssi, snr);
 
   display.clear();
   display.drawString(0, 0, "RX:");
-  display.drawString(0, 20, rxpacket);
-
-  char info[32];
-  snprintf(info, sizeof(info), "RSSI: %d SNR: %d", rssi, snr);
-  display.drawString(0, 40, info);
+  display.drawString(0, 20, String("Car: ") + carId);
+  display.drawString(0, 40, timeLine);
+  if (strlen(status) > 0) {
+    display.drawString(0, 60, status);
+  }
 
   display.display();
 }
 
 void setup() {
-
   Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);
   Serial.begin(115200);
 
@@ -75,9 +119,8 @@ void setup() {
   Serial.println("LoRa Receiver with E-Ink ready.");
 }
 
-void VextON(void)
-{
-  pinMode(18,OUTPUT);
+void VextON(void) {
+  pinMode(18, OUTPUT);
   digitalWrite(18, HIGH);
 }
 
