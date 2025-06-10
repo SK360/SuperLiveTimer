@@ -154,48 +154,61 @@ void loop() {
         Serial.println("Input too long or empty! (max 79 chars)");
       }
     }
-  } else if (currentMode == MODE_TEST) {
+} else if (currentMode == MODE_TEST) {
     unsigned long now = millis();
     if (lora_idle && (now - lastTestSend >= TEST_SEND_PERIOD)) {
-      int carIdx = random(0, CarIDListSize);
-      CarID = CarIDList[carIdx];
+        int carIdx = random(0, CarIDListSize);
+        CarID = CarIDList[carIdx];
 
-      switch (sendStep) {
-        case 0: ftd = true; personalbest = false; offcourse = false; cones = 0; break;
-        case 1: ftd = false; personalbest = true; offcourse = false; cones = 0; break;
-        case 2: ftd = false; personalbest = false; offcourse = true; cones = 0; break;
-        case 3: ftd = false; personalbest = false; offcourse = false; cones = 2; break;
-        case 4: ftd = false; personalbest = false; offcourse = false; cones = 0; break;
-      }
-      sendStep = (sendStep + 1) % 5;
+        // Reset all flags
+        ftd = false;
+        personalbest = false;
+        offcourse = false;
+        cones = 0;
+        bool dnf = false;
+        bool rerun = false;
 
-      long finishtime_raw = random(20000, 40001);
-      finishtime = finishtime_raw / 1000.0;
+        switch (sendStep) {
+            case 0: /* No flags */ break;
+            case 1: personalbest = true; break;
+            case 2: ftd = true; break;
+            case 3: offcourse = true; break;
+            case 4: dnf = true; break;
+            case 5: rerun = true; break;
+            case 6: cones = 2; break;
+        }
 
-      snprintf(txpacket, BUFFER_SIZE, "%s,2,%.3f,%d,%d,%d,0,0,%d,%s",
-               MAGIC_WORD,
-               finishtime,
-               personalbest ? 1 : 0,
-               ftd ? 1 : 0,
-               offcourse ? 1 : 0,
-               cones,
-               CarID);
+        sendStep = (sendStep + 1) % 7;
 
-      Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", txpacket, strlen(txpacket));
+        long finishtime_raw = random(20000, 40001);
+        finishtime = finishtime_raw / 1000.0;
 
-      char ft_str[10];
-      snprintf(ft_str, sizeof(ft_str), "%.3f", finishtime);
+        snprintf(txpacket, BUFFER_SIZE, "%s,2,%.3f,%d,%d,%d,%d,%d,%d,%s",
+                 MAGIC_WORD,
+                 finishtime,
+                 personalbest ? 1 : 0,
+                 ftd ? 1 : 0,
+                 offcourse ? 1 : 0,
+                 dnf ? 1 : 0,
+                 rerun ? 1 : 0,
+                 cones,
+                 CarID);
 
-      display.clear();
-      display.drawString(0, 0, "Mode: Test");
-      display.drawString(0, 20, ft_str);
-      display.display();
+        Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", txpacket, strlen(txpacket));
 
-      Radio.Send((uint8_t *)txpacket, strlen(txpacket));
-      lora_idle = false;
-      lastTestSend = now;
+        char ft_str[10];
+        snprintf(ft_str, sizeof(ft_str), "%.3f", finishtime);
+
+        display.clear();
+        display.drawString(0, 0, "Mode: Test");
+        display.drawString(0, 20, ft_str);
+        display.display();
+
+        Radio.Send((uint8_t *)txpacket, strlen(txpacket));
+        lora_idle = false;
+        lastTestSend = now;
     }
-  }
+}
 
   Radio.IrqProcess();
 }
