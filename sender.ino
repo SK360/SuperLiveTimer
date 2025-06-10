@@ -6,7 +6,7 @@
 static SSD1306Wire display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
 
 #define BUTTON_PIN 0 // USER button GPIO
-#define HOLD_TIME 1000 // ms: how long to hold to switch modes
+#define HOLD_TIME 1000 // ms
 
 #define RF_FREQUENCY    915000000 // Hz
 #define TX_OUTPUT_POWER 21        // dBm
@@ -34,12 +34,11 @@ enum Mode {
 };
 Mode currentMode = MODE_SERIAL;
 
-// Button handling
 unsigned long buttonPressStart = 0;
 bool buttonWasPressed = false;
 bool holdHandled = false;
 
-// For test mode
+// Test mode data
 const char* CarIDList[] = {
     "66EVX", "87EVX", "41EVX", "18CAMS", "127CAMS", "5CAMS", "83SS", "88ES", "49GST", "91XP", "9SSP", "77EST"
 };
@@ -55,11 +54,11 @@ unsigned long lastTestSend = 0;
 const unsigned long TEST_SEND_PERIOD = 3000; // ms
 
 void VextON(void) {
-  pinMode(Vext,OUTPUT);
+  pinMode(Vext, OUTPUT);
   digitalWrite(Vext, LOW);
 }
 void VextOFF(void) {
-  pinMode(Vext,OUTPUT);
+  pinMode(Vext, OUTPUT);
   digitalWrite(Vext, HIGH);
 }
 
@@ -76,141 +75,162 @@ void showMode() {
 }
 
 void setup() {
-    Serial.begin(115200);
-    Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);
+  Serial.begin(115200);
+  Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);
 
-    VextON();
-    delay(100);
-    display.init();
-    display.setFont(ArialMT_Plain_24);
+  VextON();
+  delay(100);
+  display.init();
+  display.setFont(ArialMT_Plain_24);
 
-    pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-    RadioEvents.TxDone = OnTxDone;
-    RadioEvents.TxTimeout = OnTxTimeout;
+  RadioEvents.TxDone = OnTxDone;
+  RadioEvents.TxTimeout = OnTxTimeout;
 
-    Radio.Init(&RadioEvents);
-    Radio.SetChannel(RF_FREQUENCY);
-    Radio.SetTxConfig(MODEM_LORA, TX_OUTPUT_POWER, 0, LORA_BANDWIDTH,
-                      LORA_SPREADING_FACTOR, LORA_CODINGRATE,
-                      LORA_PREAMBLE_LENGTH, LORA_FIX_LENGTH_PAYLOAD_ON,
-                      true, 0, 0, LORA_IQ_INVERSION_ON, 3000);
+  Radio.Init(&RadioEvents);
+  Radio.SetChannel(RF_FREQUENCY);
+  Radio.SetTxConfig(MODEM_LORA, TX_OUTPUT_POWER, 0, LORA_BANDWIDTH,
+                    LORA_SPREADING_FACTOR, LORA_CODINGRATE,
+                    LORA_PREAMBLE_LENGTH, LORA_FIX_LENGTH_PAYLOAD_ON,
+                    true, 0, 0, LORA_IQ_INVERSION_ON, 3000);
 
-    showMode();
-    randomSeed(analogRead(0));
+  showMode();
+  randomSeed(analogRead(0));
 }
 
 void loop() {
-    handleButton();
+  handleButton();
 
-    if (currentMode == MODE_SERIAL) {
-        // --- Serial input to LoRa ---
-        if (lora_idle && Serial.available()) {
-            String inString = Serial.readStringUntil('\n');
-            inString.trim();
+  if (currentMode == MODE_SERIAL) {
+    if (lora_idle && Serial.available()) {
+      String inString = Serial.readStringUntil('\n');
+      inString.trim();
 
-            int totalLen = strlen(MAGIC_WORD) + 1 + inString.length();
-            if (inString.length() > 0 && totalLen < BUFFER_SIZE) {
-                snprintf(txpacket, BUFFER_SIZE, "%s,%s", MAGIC_WORD, inString.c_str());
-
-                Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", inString.c_str(), inString.length());
-
-                int idx1 = inString.indexOf(',');
-                int idx2 = inString.indexOf(',', idx1 + 1);
-                String timeStr = (idx1 >= 0 && idx2 > idx1) ? inString.substring(idx1 + 1, idx2) : "?";
-                display.clear();
-                display.drawString(0, 0, timeStr);
-                display.display();
-
-                Radio.Send((uint8_t *)txpacket, strlen(txpacket));
-                lora_idle = false;
-            } else {
-                Serial.println("Input too long or empty! (max 79 chars)");
-            }
+      if (inString.length() > 0 && (strlen(MAGIC_WORD) + 1 + inString.length()) < BUFFER_SIZE) {
+        // Parse the comma-separated values
+        int idxs[6];
+        int lastIdx = -1;
+        for (int i = 0; i < 6; i++) {
+          idxs[i] = inString.indexOf(',', lastIdx + 1);
+          if (idxs[i] == -1 && i < 5) {
+            Serial.println("Invalid input format!");
+            return;
+          }
+          lastIdx = idxs[i];
         }
-    } else if (currentMode == MODE_TEST) {
-        // --- Periodically send test packet ---
-        unsigned long now = millis();
-        if (lora_idle && (now - lastTestSend >= TEST_SEND_PERIOD)) {
-            int carIdx = random(0, CarIDListSize);
-            CarID = CarIDList[carIdx];
 
-            switch(sendStep) {
-                case 0: ftd = true; personalbest = false; offcourse = false; cones = 0; break;
-                case 1: ftd = false; personalbest = true; offcourse = false; cones = 0; break;
-                case 2: ftd = false; personalbest = false; offcourse = true; cones = 0; break;
-                case 3: ftd = false; personalbest = false; offcourse = false; cones = 2; break;
-                case 4: ftd = false; personalbest = false; offcourse = false; cones = 0; break;
-            }
-            sendStep = (sendStep + 1) % 5;
+        String carID = inString.substring(0, idxs[0]);
+        String finishTimeStr = inString.substring(idxs[0] + 1, idxs[1]);
+        String ftdStr = inString.substring(idxs[1] + 1, idxs[2]);
+        String pbStr = inString.substring(idxs[2] + 1, idxs[3]);
+        String ocStr = inString.substring(idxs[3] + 1, idxs[4]);
+        String conesStr = inString.substring(idxs[4] + 1);
 
-            long finishtime_raw = random(20000, 40001);
-            finishtime = finishtime_raw / 1000.0;
+        int ftd = ftdStr.toInt();
+        int personalBest = pbStr.toInt();
+        int offcourse = ocStr.toInt();
+        int cones = conesStr.toInt();
+        float finishTime = finishTimeStr.toFloat();
 
-            char ft_str[10];
-            snprintf(ft_str, sizeof(ft_str), "%.3f", finishtime);
-
-            snprintf(txpacket, BUFFER_SIZE, "%s,%s,%.3f,%d,%d,%d,%d",
+        snprintf(txpacket, BUFFER_SIZE, "%s,1,%.3f,%d,%d,%d,0,0,%d,%s",
                  MAGIC_WORD,
-                 CarID,
-                 finishtime,
-                 ftd ? 1 : 0,
-                 personalbest ? 1 : 0,
-                 offcourse ? 1 : 0,
-                 cones);
+                 finishTime,
+                 personalBest,
+                 ftd,
+                 offcourse,
+                 cones,
+                 carID.c_str());
 
-            Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", txpacket, strlen(txpacket));
+        Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", txpacket, strlen(txpacket));
 
-            display.clear();
-            display.drawString(0, 0, "Mode: Test");
-            display.drawString(0, 20, ft_str);
-            display.display();
+        display.clear();
+        display.drawString(0, 0, finishTimeStr);
+        display.display();
 
-            Radio.Send((uint8_t *)txpacket, strlen(txpacket));
-            lora_idle = false;
-            lastTestSend = now;
-        }
+        Radio.Send((uint8_t *)txpacket, strlen(txpacket));
+        lora_idle = false;
+      } else {
+        Serial.println("Input too long or empty! (max 79 chars)");
+      }
     }
-    Radio.IrqProcess();
+  } else if (currentMode == MODE_TEST) {
+    unsigned long now = millis();
+    if (lora_idle && (now - lastTestSend >= TEST_SEND_PERIOD)) {
+      int carIdx = random(0, CarIDListSize);
+      CarID = CarIDList[carIdx];
+
+      switch (sendStep) {
+        case 0: ftd = true; personalbest = false; offcourse = false; cones = 0; break;
+        case 1: ftd = false; personalbest = true; offcourse = false; cones = 0; break;
+        case 2: ftd = false; personalbest = false; offcourse = true; cones = 0; break;
+        case 3: ftd = false; personalbest = false; offcourse = false; cones = 2; break;
+        case 4: ftd = false; personalbest = false; offcourse = false; cones = 0; break;
+      }
+      sendStep = (sendStep + 1) % 5;
+
+      long finishtime_raw = random(20000, 40001);
+      finishtime = finishtime_raw / 1000.0;
+
+      snprintf(txpacket, BUFFER_SIZE, "%s,1,%.3f,%d,%d,%d,0,0,%d,%s",
+               MAGIC_WORD,
+               finishtime,
+               personalbest ? 1 : 0,
+               ftd ? 1 : 0,
+               offcourse ? 1 : 0,
+               cones,
+               CarID);
+
+      Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", txpacket, strlen(txpacket));
+
+      char ft_str[10];
+      snprintf(ft_str, sizeof(ft_str), "%.3f", finishtime);
+
+      display.clear();
+      display.drawString(0, 0, "Mode: Test");
+      display.drawString(0, 20, ft_str);
+      display.display();
+
+      Radio.Send((uint8_t *)txpacket, strlen(txpacket));
+      lora_idle = false;
+      lastTestSend = now;
+    }
+  }
+
+  Radio.IrqProcess();
 }
 
-// Button handling for 1s hold to toggle mode
 void handleButton() {
-    bool buttonPressed = (digitalRead(BUTTON_PIN) == LOW);
+  bool buttonPressed = (digitalRead(BUTTON_PIN) == LOW);
 
-    if (buttonPressed && !buttonWasPressed) {
-        // Button just pressed
-        buttonPressStart = millis();
-        holdHandled = false;
-    }
-    else if (buttonPressed && !holdHandled && (millis() - buttonPressStart >= HOLD_TIME)) {
-        // Button held for at least HOLD_TIME ms, switch mode
-        toggleMode();
-        holdHandled = true;  // Prevent multiple toggles on one hold
-    }
-    else if (!buttonPressed && buttonWasPressed) {
-        // Button released
-        buttonPressStart = 0;
-        holdHandled = false;
-    }
-    buttonWasPressed = buttonPressed;
+  if (buttonPressed && !buttonWasPressed) {
+    buttonPressStart = millis();
+    holdHandled = false;
+  } else if (buttonPressed && !holdHandled && (millis() - buttonPressStart >= HOLD_TIME)) {
+    toggleMode();
+    holdHandled = true;
+  } else if (!buttonPressed && buttonWasPressed) {
+    buttonPressStart = 0;
+    holdHandled = false;
+  }
+  buttonWasPressed = buttonPressed;
 }
 
 void toggleMode() {
-    currentMode = (currentMode == MODE_SERIAL) ? MODE_TEST : MODE_SERIAL;
-    showMode();
-    Serial.printf("Mode switched to %s\n", (currentMode == MODE_SERIAL) ? "Serial" : "Test");
+  currentMode = (currentMode == MODE_SERIAL) ? MODE_TEST : MODE_SERIAL;
+  showMode();
+  Serial.printf("Mode switched to %s\n", (currentMode == MODE_SERIAL) ? "Serial" : "Test");
 }
 
 void OnTxDone(void) {
-    Serial.println("TX done......");
-    display.drawString(0, 40, "Sent");
-    display.display();
-    lora_idle = true;
+  Serial.println("TX done......");
+  display.drawString(0, 40, "Sent");
+  display.display();
+  lora_idle = true;
 }
 
 void OnTxTimeout(void) {
-    Radio.Sleep();
-    Serial.println("TX Timeout......");
-    lora_idle = true;
+  Radio.Sleep();
+  Serial.println("TX Timeout......");
+  lora_idle = true;
 }
