@@ -6,7 +6,7 @@
 static SSD1306Wire display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
 
 #define BUTTON_PIN 0 // USER button GPIO
-#define HOLD_TIME 1000 // ms
+#define HOLD_TIME 2000 // ms
 
 #define RF_FREQUENCY    915000000 // Hz
 #define TX_OUTPUT_POWER 21        // dBm
@@ -51,7 +51,7 @@ bool offcourse = false;
 int cones = 0;
 static int sendStep = 0;
 unsigned long lastTestSend = 0;
-const unsigned long TEST_SEND_PERIOD = 3000; // ms
+const unsigned long TEST_SEND_PERIOD = 5000; // ms
 
 void VextON(void) {
   pinMode(Vext, OUTPUT);
