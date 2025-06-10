@@ -133,7 +133,7 @@ void loop() {
         int cones = conesStr.toInt();
         float finishTime = finishTimeStr.toFloat();
 
-        snprintf(txpacket, BUFFER_SIZE, "%s,1,%.3f,%d,%d,%d,0,0,%d,%s",
+        snprintf(txpacket, BUFFER_SIZE, "%s,2,%.3f,%d,%d,%d,0,0,%d,%s",
                  MAGIC_WORD,
                  finishTime,
                  personalBest,
@@ -172,7 +172,7 @@ void loop() {
       long finishtime_raw = random(20000, 40001);
       finishtime = finishtime_raw / 1000.0;
 
-      snprintf(txpacket, BUFFER_SIZE, "%s,1,%.3f,%d,%d,%d,0,0,%d,%s",
+      snprintf(txpacket, BUFFER_SIZE, "%s,2,%.3f,%d,%d,%d,0,0,%d,%s",
                MAGIC_WORD,
                finishtime,
                personalbest ? 1 : 0,
