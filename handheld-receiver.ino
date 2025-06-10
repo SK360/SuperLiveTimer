@@ -246,12 +246,16 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
         return;
     }
 
-    char *carID = strtok(NULL, ",");
+    // New format: heat,finishTime,personalBest,ftd,offCourse,dnf,rerun,cones,carID
+    char *heat = strtok(NULL, ",");
     char *finishTime = strtok(NULL, ",");
-    char *ftd = strtok(NULL, ",");
     char *personalBest = strtok(NULL, ",");
+    char *ftd = strtok(NULL, ",");
     char *offCourse = strtok(NULL, ",");
+    char *dnf = strtok(NULL, ",");
+    char *rerun = strtok(NULL, ",");
     char *cones = strtok(NULL, ",");
+    char *carID = strtok(NULL, ",");
 
     bool showThisPacket = true;
     String rxCar = carID ? String(carID) : "";
@@ -261,15 +265,17 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
         showThisPacket = rxCar.equalsIgnoreCase(settings.carId);
     } else if (settings.filterMode == FilterMode::MyClass && settings.carClass.length() > 0) {
         String rxClass = extractClass(rxCar);
-        showThisPacket = (rxClass.equalsIgnoreCase(settings.carClass));
+        showThisPacket = rxClass.equalsIgnoreCase(settings.carClass);
     }
 
-    if (carID && finishTime && ftd && personalBest && offCourse && cones && showThisPacket) {
+    if (carID && finishTime && ftd && personalBest && offCourse && dnf && rerun && cones && showThisPacket) {
         Serial.print(carID); Serial.print(",");
         Serial.print(finishTime); Serial.print(",");
         Serial.print(ftd); Serial.print(",");
         Serial.print(personalBest); Serial.print(",");
         Serial.print(offCourse); Serial.print(",");
+        Serial.print(dnf); Serial.print(",");
+        Serial.print(rerun); Serial.print(",");
         Serial.println(cones);
 
         display.clear();
@@ -287,7 +293,7 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
         }
 
         display.setFont(ArialMT_Plain_24);
-        if (carID) display.drawString(0, 0, formatCarID(carID));
+        display.drawString(0, 0, formatCarID(carID));
 
         if (finishTime) {
             String finishDisplay = String(finishTime);
@@ -297,51 +303,51 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
             display.drawString(0, 20, finishDisplay);
         }
 
-        if (offCourse && atoi(offCourse)) {
+        // === Priority Status Display ===
+        display.setFont(ArialMT_Plain_24);
+        if (rerun && atoi(rerun)) {
+            display.drawString(0, 40, "RERUN");
+        } else if (dnf && atoi(dnf)) {
+            display.drawString(0, 40, "DNF");
+        } else if (offCourse && atoi(offCourse)) {
             display.drawString(0, 40, "Off Course");
-            display.display();
         } else if (ftd && atoi(ftd)) {
-            display.setFont(ArialMT_Plain_24);
             int textWidth = display.getStringWidth("FTD!");
             int maxX = 128 - textWidth;
             for (int x = 0; x <= maxX; x += 6) {
                 display.clear();
-                if (carID) display.drawString(0, 0, formatCarID(carID));
-                if (finishTime) {
-                    String finishDisplay = String(finishTime);
-                    if (cones && atoi(cones) != 0) {
-                        finishDisplay += " +" + String(atoi(cones));
-                    }
-                    display.drawString(0, 20, finishDisplay);
+                display.drawString(0, 0, formatCarID(carID));
+                String finishDisplay = String(finishTime);
+                if (cones && atoi(cones) != 0) {
+                    finishDisplay += " +" + String(atoi(cones));
                 }
+                display.drawString(0, 20, finishDisplay);
                 display.drawString(x, 40, "FTD!");
                 display.display();
                 delay(60);
             }
             for (int x = maxX; x >= 0; x -= 6) {
                 display.clear();
-                if (carID) display.drawString(0, 0, formatCarID(carID));
-                if (finishTime) {
-                    String finishDisplay = String(finishTime);
-                    if (cones && atoi(cones) != 0) {
-                        finishDisplay += " +" + String(atoi(cones));
-                    }
-                    display.drawString(0, 20, finishDisplay);
+                display.drawString(0, 0, formatCarID(carID));
+                String finishDisplay = String(finishTime);
+                if (cones && atoi(cones) != 0) {
+                    finishDisplay += " +" + String(atoi(cones));
                 }
+                display.drawString(0, 20, finishDisplay);
                 display.drawString(x, 40, "FTD!");
                 display.display();
                 delay(60);
             }
         } else if (personalBest && atoi(personalBest)) {
             display.drawString(0, 40, "PB");
-            display.display();
-        } else {
-            display.display();
         }
+
+        display.display();
     }
 
     loraIdle = true;
 }
+
 
 // === Arduino Setup ===
 void setup() {
