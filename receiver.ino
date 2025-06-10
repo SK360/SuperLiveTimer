@@ -34,19 +34,15 @@ int packetCount = 0;
 
 bool lora_idle = true;
 
-// Button and Mode Management
+// Button
 #define USER_BUTTON_PIN 0
-const unsigned long LONG_PRESS_DURATION = 2000;
+const unsigned long TOGGLE_HOLD_DURATION = 5000; // 5 seconds
 unsigned long buttonPressStartTime = 0;
 bool buttonHeld = false;
-bool lastButtonState = HIGH;
+bool displayToggledDuringHold = false;
 
-enum DisplayMode { RACE_MODE, DIAGNOSTICS_MODE };
-DisplayMode currentMode = RACE_MODE;
-
-// Ignore early button state after boot
-unsigned long startupTime = 0;
-unsigned long startupIgnoreTime = 3000;
+// Display state
+bool displayOn = false;
 
 // Format Car ID
 String formatCarID(const char* carID) {
@@ -71,38 +67,48 @@ void VextOFF(void) {
     digitalWrite(Vext, HIGH);
 }
 
-// Deep Sleep
-void goToSleep() {
-    display.clear();
-    display.setFont(ArialMT_Plain_16);
-    display.drawString(0, 20, "Sleeping...");
-    display.display();
-    delay(1000);
-
-    esp_sleep_enable_ext0_wakeup((gpio_num_t)USER_BUTTON_PIN, 0);
-    VextOFF();
-    esp_deep_sleep_start();
+// Toggle Display With Feedback
+void toggleDisplay(bool on) {
+    if (on) {
+        VextON();
+        delay(100);
+        display.init();
+        display.clear();
+        display.setFont(ArialMT_Plain_16);
+        display.drawString(0, 20, "Display On");
+        display.display();
+    } else {
+        display.clear();
+        display.setFont(ArialMT_Plain_16);
+        display.drawString(0, 20, "Display Off");
+        display.display();
+        delay(1000);
+        display.clear();
+        display.display();
+        VextOFF();
+    }
 }
 
 // Setup
 void setup() {
     Serial.begin(115200);
-    currentMode = RACE_MODE;
-
     Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);
     pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
 
-    startupTime = millis();
-
     txNumber = 0;
     rssi = 0;
+
+    // Show splash screen
     VextON();
     delay(100);
     display.init();
     display.setFont(ArialMT_Plain_16);
-    display.drawString(0, 0, "FinishTime");
-    display.drawString(0, 20, "Waiting for Data");
+    display.drawString(0, 20, "SuperLiveTimer");
     display.display();
+    delay(5000);
+    display.clear();
+    display.display();
+    VextOFF();
 
     RadioEvents.RxDone = OnRxDone;
     Radio.Init(&RadioEvents);
@@ -115,40 +121,21 @@ void setup() {
 
 // Main Loop
 void loop() {
-    if (millis() - startupTime < startupIgnoreTime) {
-        if (lora_idle) {
-            lora_idle = false;
-            Radio.Rx(0);
-        }
-        Radio.IrqProcess();
-        return;
-    }
-
     bool buttonPressed = digitalRead(USER_BUTTON_PIN) == LOW;
     unsigned long now = millis();
 
-    if (lastButtonState != buttonPressed) {
-        lastButtonState = buttonPressed;
-
-        if (buttonPressed) {
+    if (buttonPressed) {
+        if (!buttonHeld) {
+            buttonHeld = true;
             buttonPressStartTime = now;
-            buttonHeld = false;
-        } else {
-            unsigned long pressDuration = now - buttonPressStartTime;
-            if (!buttonHeld && pressDuration < LONG_PRESS_DURATION) {
-                currentMode = (currentMode == RACE_MODE) ? DIAGNOSTICS_MODE : RACE_MODE;
-                display.clear();
-                display.setFont(ArialMT_Plain_16);
-                display.drawString(0, 20, currentMode == DIAGNOSTICS_MODE ? "Diagnostics On" : "Race Mode");
-                display.display();
-                delay(500);
-            }
+            displayToggledDuringHold = false;
+        } else if (!displayToggledDuringHold && (now - buttonPressStartTime >= TOGGLE_HOLD_DURATION)) {
+            displayOn = !displayOn;
+            toggleDisplay(displayOn);  // Immediate feedback during hold
+            displayToggledDuringHold = true;
         }
-    }
-
-    if (buttonPressed && !buttonHeld && (now - buttonPressStartTime > LONG_PRESS_DURATION)) {
-        buttonHeld = true;
-        goToSleep();
+    } else {
+        buttonHeld = false;
     }
 
     if (lora_idle) {
@@ -174,91 +161,47 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
         return;
     }
 
-    char *carID = strtok(NULL, ",");
-    char *finishTime = strtok(NULL, ",");
-    char *ftd = strtok(NULL, ",");
+    // Parse all expected fields
+    char *heat         = strtok(NULL, ",");
+    char *finishTime   = strtok(NULL, ",");
     char *personalBest = strtok(NULL, ",");
-    char *offCourse = strtok(NULL, ",");
-    char *cones = strtok(NULL, ",");
+    char *ftd          = strtok(NULL, ",");
+    char *offCourse    = strtok(NULL, ",");
+    char *dnf          = strtok(NULL, ",");
+    char *rerun        = strtok(NULL, ",");
+    char *cones        = strtok(NULL, ",");
+    char *carID        = strtok(NULL, ",");
 
-    if (carID && finishTime && ftd && personalBest && offCourse && cones) {
-        Serial.print(carID); Serial.print(",");
+    if (heat && finishTime && personalBest && ftd && offCourse && dnf && rerun && cones && carID) {
+        Serial.print(heat); Serial.print(",");
         Serial.print(finishTime); Serial.print(",");
-        Serial.print(ftd); Serial.print(",");
         Serial.print(personalBest); Serial.print(",");
+        Serial.print(ftd); Serial.print(",");
         Serial.print(offCourse); Serial.print(",");
-        Serial.println(cones);
+        Serial.print(dnf); Serial.print(",");
+        Serial.print(rerun); Serial.print(",");
+        Serial.print(cones); Serial.print(",");
+        Serial.println(carID);
     }
 
-    display.clear();
-
-    if (currentMode == DIAGNOSTICS_MODE) {
-        display.setFont(ArialMT_Plain_16);
-        display.drawString(0, 0, "Diagnostics Mode");
-        display.drawString(0, 20, "RSSI: " + String(rssi) + " dBm");
-        display.drawString(0, 36, "SNR: " + String(snr) + " dB");
-        display.setFont(ArialMT_Plain_10);
-        display.drawString(0, 52, "Size: " + String(size) + "  Packets: " + String(packetCount));
-        display.display();
+    if (!displayOn) {
         lora_idle = true;
         return;
     }
 
-    display.setFont(ArialMT_Plain_24);
-    if (carID) display.drawString(0, 0, formatCarID(carID));
+    display.clear();
+    display.setFont(ArialMT_Plain_16);
 
     if (finishTime) {
         String finishDisplay = String(finishTime);
         if (cones && atoi(cones) != 0) {
             finishDisplay += " +" + String(atoi(cones));
         }
-        display.drawString(0, 20, finishDisplay);
+        display.drawString(0, 0, finishDisplay);
     }
 
-    if (offCourse && atoi(offCourse)) {
-        display.drawString(0, 40, "Off Course");
-        display.display();
-    } else if (ftd && atoi(ftd)) {
-        // FTD animation: scroll right and back to left
-        display.setFont(ArialMT_Plain_24);
-        int textWidth = display.getStringWidth("FTD!");
-        int maxX = 128 - textWidth;
-
-        for (int x = 0; x <= maxX; x += 6) {
-            display.clear();
-            if (carID) display.drawString(0, 0, formatCarID(carID));
-            if (finishTime) {
-                String finishDisplay = String(finishTime);
-                if (cones && atoi(cones) != 0) {
-                    finishDisplay += " +" + String(atoi(cones));
-                }
-                display.drawString(0, 20, finishDisplay);
-            }
-            display.drawString(x, 40, "FTD!");
-            display.display();
-            delay(60);
-        }
-
-        for (int x = maxX; x >= 0; x -= 6) {
-            display.clear();
-            if (carID) display.drawString(0, 0, formatCarID(carID));
-            if (finishTime) {
-                String finishDisplay = String(finishTime);
-                if (cones && atoi(cones) != 0) {
-                    finishDisplay += " +" + String(atoi(cones));
-                }
-                display.drawString(0, 20, finishDisplay);
-            }
-            display.drawString(x, 40, "FTD!");
-            display.display();
-            delay(60);
-        }
-    } else if (personalBest && atoi(personalBest)) {
-        display.drawString(0, 40, "PB");
-        display.display();
-    } else {
-        display.display();
-    }
+    display.drawString(0, 20, "RSSI: " + String(rssi) + " dBm");
+    display.display();
 
     lora_idle = true;
 }
