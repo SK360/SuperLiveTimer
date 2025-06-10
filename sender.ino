@@ -75,7 +75,7 @@ void showMode() {
 }
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
   Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);
 
   VextON();
