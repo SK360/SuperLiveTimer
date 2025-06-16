@@ -34,8 +34,8 @@
 const char* apPassword = "12345678";
 
 // === Timings ===
-const unsigned long wifiHoldDuration = 5000;
-const unsigned long sleepHoldDuration = 10000;
+const unsigned long wifiHoldDuration = 2000;
+const unsigned long sleepHoldDuration = 5000;
 const unsigned long startupIgnoreTime = 5000; // ms
 
 // === Display ===
@@ -446,6 +446,13 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
 
 // === Arduino Setup ===
 void setup() {
+    pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
+    int startupDelay = 0;
+    while (digitalRead(USER_BUTTON_PIN) == LOW && startupDelay < 2000) {
+        showTempMessage("Release button", "to continue...");
+        delay(10);
+        startupDelay += 10;
+    }
     Serial.begin(115200);
 
     const esp_task_wdt_config_t wdt_config = {
@@ -453,6 +460,11 @@ void setup() {
         .idle_core_mask = BIT(0),  // Apply to core 0 (usually enough)
         .trigger_panic = true      // Reboot if timeout
     };
+
+    if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+    startupTime = millis();
+    startupIgnoreActive = true;
+    } 
 
     // Initialize and register the current task
     esp_task_wdt_init(&wdt_config);
@@ -509,6 +521,7 @@ void loop() {
     // Startup button ignore
     if (startupIgnoreActive) {
         if (now - startupTime < startupIgnoreTime) {
+            // Skip button handling during startup ignore window
             if (loraIdle) {
                 loraIdle = false;
                 Radio.Rx(0);
@@ -516,20 +529,17 @@ void loop() {
             Radio.IrqProcess();
             return;
         } else {
-            lastButtonState = digitalRead(USER_BUTTON_PIN);
+            // Only update last button state using RAW read to avoid Bounce2 glitches
+            lastButtonState = digitalRead(USER_BUTTON_PIN); 
             startupIgnoreActive = false;
-            if (loraIdle) {
-                loraIdle = false;
-                Radio.Rx(0);
-            }
-            Radio.IrqProcess();
-            return;
         }
     }
 
     // --- Button Handling ---
     debouncer.update();
-    bool buttonPressed = !debouncer.read(); // LOW when pressed
+    bool buttonPressed = (millis() - startupTime < 1000) 
+                        ? (digitalRead(USER_BUTTON_PIN) == LOW) 
+                        : !debouncer.read();
 
     if (lastButtonState != buttonPressed) {
         lastButtonState = buttonPressed;
