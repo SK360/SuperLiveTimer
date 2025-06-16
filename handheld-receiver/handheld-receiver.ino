@@ -28,7 +28,6 @@
 #define BUFFER_SIZE 80
 
 // === WiFi AP Config ===
-const char* apSsid = "SuperLiveTimer-Setup";
 const char* apPassword = "12345678";
 
 // === Timings ===
@@ -58,6 +57,17 @@ String formatCarID(const char* carID) {
         }
     }
     return id;
+}
+
+String getOrCreateSSID(Preferences& prefs) {
+    String ssid = prefs.getString("ssid", "");
+    if (ssid.length() == 0) {
+        uint64_t chipId = ESP.getEfuseMac();
+        uint16_t shortId = (uint16_t)(chipId & 0xFFFF);
+        ssid = "SLT-" + String(shortId, HEX);
+        prefs.putString("ssid", ssid);
+    }
+    return ssid;
 }
 
 // === Enums ===
@@ -150,13 +160,26 @@ void goToSleep() {
 }
 
 void startWiFiAP() {
-    WiFi.softAP(apSsid, apPassword);
+    String ssid = getOrCreateSSID(prefs);
+    WiFi.softAP(ssid.c_str(), apPassword);
+    IPAddress ip = WiFi.softAPIP();
     server.begin();
     wifiEnabled = true;
     digitalWrite(WIFI_LED_PIN, HIGH);
-    showTempMessage("WiFi AP Enabled", "");
-    delay(1000);
+
+    display.clear();
+    display.setFont(ArialMT_Plain_16);
+    display.drawString(0, 0, "WiFi AP Enabled");
+    display.drawString(0, 18, "SSID: " + ssid);
+    display.drawString(0, 36, "Pass: " + String(apPassword));
+    
+    display.setFont(ArialMT_Plain_10); // Smaller font for IP to prevent cut-off
+    display.drawString(0, 54, "IP: " + ip.toString());
+
+    display.display();
+    delay(3000);
 }
+
 
 void stopWiFiAP() {
     server.stop();
@@ -169,38 +192,39 @@ void stopWiFiAP() {
 
 // === Web Interface ===
 String htmlPage() {
-    String page = "<!DOCTYPE HTML><html><head><title>NHSCC Super Live Timer Config</title>";
-    page += "<meta name='viewport' content='width=device-width, initial-scale=1'></head><body>";
-    page += "<h2>NHSCC Super Live Timer Config</h2>";
+    String page = "<!DOCTYPE html><html><head><title>Super Live Timer Config</title>";
+    page += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    page += "<meta http-equiv='refresh' content='0; url=/'>";
+    page += "<style>";
+    page += "body { font-family: sans-serif; max-width: 500px; margin: auto; padding: 20px; background: #f4f4f4; color: #333; }";
+    page += "h2 { text-align: center; }";
+    page += "form { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }";
+    page += "label { display: block; margin-top: 15px; font-weight: bold; }";
+    page += "input[type='text'], input[type='submit'] { width: 100%; padding: 10px; margin-top: 5px; border-radius: 5px; border: 1px solid #ccc; }";
+    page += "input[type='submit'] { background: #2196f3; color: white; border: none; margin-top: 20px; cursor: pointer; }";
+    page += "input[type='submit']:hover { background: #1976d2; }";
+    page += "small, p { font-size: 14px; }";
+    page += "</style></head><body>";
+
+    page += "<h2>SuperLiveTimer Config</h2>";
     page += "<form action='/save' method='POST'>";
-    page += "My Car ID (for filtering):<br>";
-    page += "<input type='text' name='mycarid' value='" + settings.carId + "'><br><br>";
-    page += "Magic Word:<br>";
-    page += "<input type='text' name='magicword' value='" + settings.magicWord + "'><br><br>";
-    page += "<input type='checkbox' id='diagnostics' name='diagnostics' value='on'";
+    page += "<label for='mycarid'>My Car ID (for filtering)</label>";
+    page += "<input type='text' id='mycarid' name='mycarid' value='" + settings.carId + "'>";
+
+    page += "<label for='magicword'>Magic Word</label>";
+    page += "<input type='text' id='magicword' name='magicword' value='" + settings.magicWord + "'>";
+
+    page += "<label><input type='checkbox' id='diagnostics' name='diagnostics' value='on'";
     if (settings.diagnostics) page += " checked";
-    page += "> <label for='diagnostics'>Enable Diagnostics Mode</label><br><br>";
+    page += "> Enable Diagnostics Mode</label>";
+
     page += "<input type='submit' value='Save'>";
     page += "</form>";
-    page += "<p>Current filter: <b>";
-    if (settings.filterMode == FilterMode::MyCar && settings.carId.length() > 0)
-        page += settings.carId;
-    else if (settings.filterMode == FilterMode::MyClass && settings.carClass.length() > 0)
-        page += settings.carClass;
-    else
-        page += "None";
-    page += "</b></p>";
-    page += "<p>Current Magic Word: <b>";
-    page += settings.magicWord;
-    page += "</b></p>";
-    page += "<p>Diagnostics Mode: <b>";
-    page += (settings.diagnostics ? "Enabled" : "Disabled");
-    page += "</b></p>";
+
     page += "<hr>";
-    page += "<div style='margin-bottom:6px;font-size:14px;'>";
-    page += "SuperLiveTimer by <a href='mailto:matt.simmons@gmail.com'>Matt Simmons</a>";
-    page += "</div>";
+    page += "<p>SuperLiveTimer by <a href='mailto:matt.simmons@gmail.com'>Matt Simmons</a></p>";
     page += "<small>Firmware: " FIRMWARE_VERSION "</small>";
+
     page += "</body></html>";
     return page;
 }
@@ -226,9 +250,31 @@ void handleSave() {
     server.send(303);
 }
 
+void handleCaptivePortal() {
+    server.send(200, "text/html", htmlPage());
+}
+
 void handleWebRequests() {
     server.on("/", handleRoot);
     server.on("/save", HTTP_POST, handleSave);
+
+    // iOS captive portal triggers
+    server.on("/hotspot-detect.html", handleCaptivePortal);
+    server.on("/library/test/success.html", handleCaptivePortal);
+    server.on("/success.html", handleCaptivePortal);  // extra fallback
+
+    // Android
+    server.on("/generate_204", handleCaptivePortal);
+
+    // Windows
+    server.on("/ncsi.txt", handleCaptivePortal);
+    server.on("/fwlink", handleCaptivePortal);
+
+    // Catch-all
+    server.onNotFound([]() {
+        server.sendHeader("Location", "/", true);
+        server.send(302);
+    });
 }
 
 // === LoRa Receive Handler ===
@@ -363,6 +409,7 @@ void setup() {
     display.init();
 
     prefs.begin("supertimer", false);
+    String ssid = getOrCreateSSID(prefs);
     settings.load(prefs);
 
     // Show version number at boot
