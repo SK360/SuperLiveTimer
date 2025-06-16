@@ -6,9 +6,12 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include "esp_task_wdt.h"
+#include <Bounce2.h>
+#include <Update.h>
 
 // === Firmware Version ===
-#define FIRMWARE_VERSION "v1.0.0"
+#define FIRMWARE_VERSION "v1.0"
 
 // === Hardware Pins ===
 #define USER_BUTTON_PIN 0
@@ -122,6 +125,8 @@ int16_t rssi = 0;
 int8_t snr = 0;
 int packetCount = 0;
 
+Bounce debouncer = Bounce();
+
 // === OLED Display Functions ===
 void showStartupOLED() {
     display.clear();
@@ -152,9 +157,16 @@ void VextON() { pinMode(Vext, OUTPUT); digitalWrite(Vext, LOW); }
 void VextOFF() { pinMode(Vext, OUTPUT); digitalWrite(Vext, HIGH); }
 
 void goToSleep() {
-    showTempMessage("Sleeping...", "");
+    showTempMessage("Sleeping...", "Release button");
     delay(1000);
-    esp_sleep_enable_ext0_wakeup((gpio_num_t)USER_BUTTON_PIN, 0);
+
+    // Wait for button to be released before sleeping
+    while (digitalRead(USER_BUTTON_PIN) == LOW) {
+        delay(10);
+    }
+
+    esp_task_wdt_delete(NULL);  // Stop WDT so it doesn't trip during sleep
+    esp_sleep_enable_ext0_wakeup((gpio_num_t)USER_BUTTON_PIN, 0); // Wake on button press
     VextOFF();
     esp_deep_sleep_start();
 }
@@ -194,7 +206,6 @@ void stopWiFiAP() {
 String htmlPage() {
     String page = "<!DOCTYPE html><html><head><title>Super Live Timer Config</title>";
     page += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    page += "<meta http-equiv='refresh' content='0; url=/'>";
     page += "<style>";
     page += "body { font-family: sans-serif; max-width: 500px; margin: auto; padding: 20px; background: #f4f4f4; color: #333; }";
     page += "h2 { text-align: center; }";
@@ -219,7 +230,15 @@ String htmlPage() {
     page += "> Enable Diagnostics Mode</label>";
 
     page += "<input type='submit' value='Save'>";
+    page += "</form><br>";
+
+    page += "<details>";
+    page += "<summary><strong>Firmware Update</strong></summary>";
+    page += "<form method='POST' action='/update' enctype='multipart/form-data' style='margin-top:10px;'>";
+    page += "<input type='file' name='firmware' accept='.bin'><br><br>";
+    page += "<input type='submit' value='Upload'>";
     page += "</form>";
+    page += "</details>";
 
     page += "<hr>";
     page += "<p>SuperLiveTimer by <a href='mailto:matt.simmons@gmail.com'>Matt Simmons</a></p>";
@@ -275,6 +294,36 @@ void handleWebRequests() {
         server.sendHeader("Location", "/", true);
         server.send(302);
     });
+
+    server.on("/update", HTTP_POST, []() {
+        server.send(200, "text/plain", Update.hasError() ? "Update Failed!" : "Update Success! Rebooting...");
+        display.clear();
+        display.setFont(ArialMT_Plain_16);
+        display.drawString(0, 20, "Firmware");
+        display.drawString(0, 38, Update.hasError() ? "Update Failed!" : "Updated OK!");
+        display.display();
+        delay(1500);
+        ESP.restart();
+    }, []() {
+        HTTPUpload& upload = server.upload();
+        if (upload.status == UPLOAD_FILE_START) {
+            Serial.printf("OTA Start: %s\n", upload.filename.c_str());
+            if (!Update.begin()) {
+                Update.printError(Serial);
+            }
+        } else if (upload.status == UPLOAD_FILE_WRITE) {
+            if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+                Update.printError(Serial);
+            }
+        } else if (upload.status == UPLOAD_FILE_END) {
+            if (Update.end(true)) {
+                Serial.printf("OTA Success: %u bytes\n", upload.totalSize);
+            } else {
+                Update.printError(Serial);
+            }
+        }
+    });
+
 }
 
 // === LoRa Receive Handler ===
@@ -398,8 +447,20 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
 // === Arduino Setup ===
 void setup() {
     Serial.begin(115200);
+
+    const esp_task_wdt_config_t wdt_config = {
+        .timeout_ms = 10000,       // 10 seconds
+        .idle_core_mask = BIT(0),  // Apply to core 0 (usually enough)
+        .trigger_panic = true      // Reboot if timeout
+    };
+
+    // Initialize and register the current task
+    esp_task_wdt_init(&wdt_config);
+    esp_task_wdt_add(NULL); // Add current task
+
     Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);
-    pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
+    debouncer.attach(USER_BUTTON_PIN, INPUT_PULLUP);
+    debouncer.interval(25); // 25ms debounce time
     pinMode(WIFI_LED_PIN, OUTPUT);
     digitalWrite(WIFI_LED_PIN, LOW);
 
@@ -440,6 +501,7 @@ void setup() {
 
 // === Arduino Main Loop ===
 void loop() {
+    esp_task_wdt_reset();
     if (wifiEnabled) server.handleClient();
 
     unsigned long now = millis();
@@ -466,7 +528,8 @@ void loop() {
     }
 
     // --- Button Handling ---
-    bool buttonPressed = digitalRead(USER_BUTTON_PIN) == LOW;
+    debouncer.update();
+    bool buttonPressed = !debouncer.read(); // LOW when pressed
 
     if (lastButtonState != buttonPressed) {
         lastButtonState = buttonPressed;
@@ -476,7 +539,6 @@ void loop() {
             wifiArmed = false;
         } else {
             unsigned long pressDuration = now - buttonPressStartTime;
-            // WiFi toggle via long press
             if (!buttonHeld && wifiArmed && pressDuration >= wifiHoldDuration && pressDuration < sleepHoldDuration) {
                 if (!wifiEnabled) {
                     startWiFiAP();
@@ -484,9 +546,7 @@ void loop() {
                     stopWiFiAP();
                 }
                 wifiArmed = false;
-            }
-            // Cycle filter mode (all/my car/my class)
-            else if (!buttonHeld && pressDuration < wifiHoldDuration) {
+            } else if (!buttonHeld && pressDuration < wifiHoldDuration) {
                 settings.filterMode = static_cast<FilterMode>((static_cast<uint8_t>(settings.filterMode) + 1) % 3);
                 settings.save(prefs);
                 showStartupOLED();
@@ -502,8 +562,7 @@ void loop() {
                 showTempMessage("Release to", "enable wifi");
             else
                 showTempMessage("Release to", "disable wifi");
-        }
-        else if (heldTime >= sleepHoldDuration) {
+        } else if (heldTime >= sleepHoldDuration) {
             buttonHeld = true;
             goToSleep();
         }
