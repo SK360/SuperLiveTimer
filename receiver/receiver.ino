@@ -3,6 +3,9 @@
 #include "Arduino.h"
 #include "HT_SSD1306Wire.h"
 #include "esp_sleep.h"
+#include <Bounce2.h>
+
+Bounce debouncer = Bounce();
 
 static SSD1306Wire display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
 
@@ -93,10 +96,12 @@ void toggleDisplay(bool on) {
 void setup() {
     Serial.begin(115200);
     Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);
-    pinMode(USER_BUTTON_PIN, INPUT_PULLUP);
 
     txNumber = 0;
     rssi = 0;
+
+    debouncer.attach(USER_BUTTON_PIN, INPUT_PULLUP);
+    debouncer.interval(25);
 
     // Show splash screen
     VextON();
@@ -121,7 +126,8 @@ void setup() {
 
 // Main Loop
 void loop() {
-    bool buttonPressed = digitalRead(USER_BUTTON_PIN) == LOW;
+    debouncer.update();
+    bool buttonPressed = debouncer.read() == LOW;
     unsigned long now = millis();
 
     if (buttonPressed) {

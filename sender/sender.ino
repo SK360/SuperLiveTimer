@@ -2,6 +2,7 @@
 #include "Arduino.h"
 #include <Wire.h>
 #include "HT_SSD1306Wire.h"
+#include <Bounce2.h>
 
 static SSD1306Wire display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
 
@@ -35,8 +36,9 @@ enum Mode {
 Mode currentMode = MODE_SERIAL;
 
 unsigned long buttonPressStart = 0;
-bool buttonWasPressed = false;
 bool holdHandled = false;
+
+Bounce debouncer = Bounce();
 
 // Test mode data
 const char* CarIDList[] = {
@@ -83,7 +85,8 @@ void setup() {
   display.init();
   display.setFont(ArialMT_Plain_24);
 
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  debouncer.attach(BUTTON_PIN, INPUT_PULLUP);
+  debouncer.interval(25); // Debounce interval
 
   RadioEvents.TxDone = OnTxDone;
   RadioEvents.TxTimeout = OnTxTimeout;
@@ -100,7 +103,17 @@ void setup() {
 }
 
 void loop() {
-  handleButton();
+  debouncer.update();
+  if (debouncer.fell()) {
+    buttonPressStart = millis();
+    holdHandled = false;
+  } else if (debouncer.read() == LOW && !holdHandled && (millis() - buttonPressStart >= HOLD_TIME)) {
+    toggleMode();
+    holdHandled = true;
+  } else if (debouncer.rose()) {
+    buttonPressStart = 0;
+    holdHandled = false;
+  }
 
   if (currentMode == MODE_SERIAL) {
     if (lora_idle && Serial.available()) {
@@ -108,7 +121,6 @@ void loop() {
       inString.trim();
 
       if (inString.length() > 0 && (strlen(MAGIC_WORD) + 1 + inString.length()) < BUFFER_SIZE) {
-        // Parse the comma-separated values
         int idxs[6];
         int lastIdx = -1;
         for (int i = 0; i < 6; i++) {
@@ -154,13 +166,12 @@ void loop() {
         Serial.println("Input too long or empty! (max 79 chars)");
       }
     }
-} else if (currentMode == MODE_TEST) {
+  } else if (currentMode == MODE_TEST) {
     unsigned long now = millis();
     if (lora_idle && (now - lastTestSend >= TEST_SEND_PERIOD)) {
         int carIdx = random(0, CarIDListSize);
         CarID = CarIDList[carIdx];
 
-        // Reset all flags
         ftd = false;
         personalbest = false;
         offcourse = false;
@@ -169,7 +180,7 @@ void loop() {
         bool rerun = false;
 
         switch (sendStep) {
-            case 0: /* No flags */ break;
+            case 0: break;
             case 1: personalbest = true; break;
             case 2: ftd = true; break;
             case 3: offcourse = true; break;
@@ -208,25 +219,9 @@ void loop() {
         lora_idle = false;
         lastTestSend = now;
     }
-}
+  }
 
   Radio.IrqProcess();
-}
-
-void handleButton() {
-  bool buttonPressed = (digitalRead(BUTTON_PIN) == LOW);
-
-  if (buttonPressed && !buttonWasPressed) {
-    buttonPressStart = millis();
-    holdHandled = false;
-  } else if (buttonPressed && !holdHandled && (millis() - buttonPressStart >= HOLD_TIME)) {
-    toggleMode();
-    holdHandled = true;
-  } else if (!buttonPressed && buttonWasPressed) {
-    buttonPressStart = 0;
-    holdHandled = false;
-  }
-  buttonWasPressed = buttonPressed;
 }
 
 void toggleMode() {
