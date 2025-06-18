@@ -69,7 +69,7 @@ void showMode() {
   display.setFont(ArialMT_Plain_16);
   if (currentMode == MODE_SERIAL) {
     display.drawString(0, 0, "Mode: Serial");
-    display.drawString(0, 20, "Waiting for data");
+    display.drawString(0, 20, "Waiting for FT");
   } else {
     display.drawString(0, 0, "Mode: Test");
   }
@@ -119,6 +119,15 @@ void loop() {
     if (lora_idle && Serial.available()) {
       String inString = Serial.readStringUntil('\n');
       inString.trim();
+
+      if (inString == "PING") {
+        Serial.println("PONG");
+        display.clear();
+        display.drawString(0, 0, "Mode: Serial");
+        display.drawString(0, 20, "FT Connected");
+        display.display();
+        return;
+      }
 
       if (inString.length() > 0 && (strlen(MAGIC_WORD) + 1 + inString.length()) < BUFFER_SIZE) {
         int idxs[6];
