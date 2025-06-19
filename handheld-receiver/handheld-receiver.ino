@@ -82,15 +82,22 @@ enum class FilterMode : uint8_t {
 
 // === Settings Struct ===
 struct Settings {
-    String carId;          ///< User's car ID (e.g. "123STS")
+    std::vector<String> carIds;  ///< Multiple user car IDs
     String carClass;       ///< Derived from carId (e.g. "STS")
     String magicWord;      ///< Packet "magic word"
     bool diagnostics;      ///< Diagnostics mode on/off
     FilterMode filterMode; ///< All/MyCar/MyClass
 
     void load(Preferences& prefs) {
-        carId = prefs.getString("mycarid", "");
-        carClass = prefs.getString("myclass", extractClass(carId));
+        String raw = prefs.getString("mycarid", "");
+        carIds.clear();
+        int start = 0, idx;
+        while ((idx = raw.indexOf(';', start)) != -1) {
+            carIds.push_back(raw.substring(start, idx));
+            start = idx + 1;
+        }
+        if (start < raw.length()) carIds.push_back(raw.substring(start));
+        carClass = prefs.getString("myclass", carIds.empty() ? "" : extractClass(carIds[0]));
         magicWord = prefs.getString("magicword", "NHSCC");
         if (magicWord.length() == 0) magicWord = "NHSCC";
         diagnostics = prefs.getBool("diagnostics", false);
@@ -98,7 +105,12 @@ struct Settings {
     }
 
     void save(Preferences& prefs) const {
-        prefs.putString("mycarid", carId);
+        String joined;
+        for (const auto& id : carIds) {
+            if (!joined.isEmpty()) joined += ";";
+            joined += id;
+        }
+        prefs.putString("mycarid", joined);
         prefs.putString("myclass", carClass);
         prefs.putString("magicword", magicWord);
         prefs.putBool("diagnostics", diagnostics);
@@ -134,8 +146,12 @@ void showStartupOLED() {
     display.drawString(0, 0, "SuperLiveTimer");
     display.drawString(0, 20, "Waiting for Data");
     display.setFont(ArialMT_Plain_16);
-    if (settings.filterMode == FilterMode::MyCar && settings.carId.length() > 0) {
-        display.drawString(0, 40, "Filter: " + settings.carId);
+    if (settings.filterMode == FilterMode::MyCar && !settings.carIds.empty()) {
+        if (settings.carIds.size() == 1) {
+            display.drawString(0, 40, "Filter: " + settings.carIds[0]);
+        } else {
+            display.drawString(0, 40, "Filter: " + String(settings.carIds.size()) + " Cars");
+        }
     } else if (settings.filterMode == FilterMode::MyClass && settings.carClass.length() > 0) {
         display.drawString(0, 40, "Filter: " + settings.carClass);
     } else {
@@ -219,8 +235,23 @@ String htmlPage() {
 
     page += "<h2>SuperLiveTimer Config</h2>";
     page += "<form action='/save' method='POST'>";
-    page += "<label for='mycarid'>My Car ID (for filtering)</label>";
-    page += "<input type='text' id='mycarid' name='mycarid' value='" + settings.carId + "'>";
+    page += "<label>My Car IDs (for filtering)</label>";
+    page += "<div id='carid-container'>";
+    for (const auto& id : settings.carIds) {
+        page += "<input type='text' name='carid' value='" + id + "'><br>";
+    }
+    if (settings.carIds.empty()) {
+        page += "<input type='text' name='carid' value=''><br>";
+    }
+    page += "</div>";
+    page += "<button type='button' onclick='addCarId()'>+ Add Another Car ID</button>";
+    page += "<script>";
+    page += "function addCarId() {";
+    page += "const c = document.getElementById('carid-container');";
+    page += "const i = document.createElement('input');";
+    page += "i.type='text'; i.name='carid'; c.appendChild(i); c.appendChild(document.createElement('br'));";
+    page += "}";
+    page += "</script>";
 
     page += "<label for='magicword'>Magic Word</label>";
     page += "<input type='text' id='magicword' name='magicword' value='" + settings.magicWord + "'>";
@@ -251,11 +282,16 @@ String htmlPage() {
 void handleRoot() { server.send(200, "text/html", htmlPage()); }
 
 void handleSave() {
-    if (server.hasArg("mycarid")) {
-        settings.carId = server.arg("mycarid");
-        settings.carId.trim();
-        settings.carClass = extractClass(settings.carId);
+    settings.carIds.clear();
+    int count = server.args();
+    for (int i = 0; i < count; ++i) {
+        if (server.argName(i) == "carid") {
+            String id = server.arg(i);
+            id.trim();
+            if (!id.isEmpty()) settings.carIds.push_back(id);
+        }
     }
+    settings.carClass = settings.carIds.empty() ? "" : extractClass(settings.carIds[0]);
     if (server.hasArg("magicword")) {
         settings.magicWord = server.arg("magicword");
         settings.magicWord.trim();
@@ -356,8 +392,14 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
     String rxCar = carID ? String(carID) : "";
     rxCar.trim();
 
-    if (settings.filterMode == FilterMode::MyCar && settings.carId.length() > 0) {
-        showThisPacket = rxCar.equalsIgnoreCase(settings.carId);
+    if (settings.filterMode == FilterMode::MyCar && !settings.carIds.empty()) {
+        showThisPacket = false;
+        for (const auto& id : settings.carIds) {
+            if (rxCar.equalsIgnoreCase(id)) {
+                showThisPacket = true;
+                break;
+            }
+        }
     } else if (settings.filterMode == FilterMode::MyClass && settings.carClass.length() > 0) {
         String rxClass = extractClass(rxCar);
         showThisPacket = rxClass.equalsIgnoreCase(settings.carClass);
