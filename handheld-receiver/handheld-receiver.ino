@@ -28,7 +28,7 @@
 #define LORA_FIX_LENGTH_PAYLOAD_ON false
 #define LORA_IQ_INVERSION_ON false
 #define RX_TIMEOUT_VALUE 1000
-#define BUFFER_SIZE 80
+#define BUFFER_SIZE 160
 
 // === WiFi AP Config ===
 const char* apPassword = "12345678";

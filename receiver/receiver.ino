@@ -21,7 +21,7 @@ static SSD1306Wire display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RS
 #define LORA_IQ_INVERSION_ON        false
 
 #define RX_TIMEOUT_VALUE            1000
-#define BUFFER_SIZE                 80
+#define BUFFER_SIZE                 160
 
 const char* MAGIC_WORD = "NHSCC";
 
