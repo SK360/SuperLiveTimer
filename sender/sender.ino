@@ -3,103 +3,193 @@
 #include <Wire.h>
 #include "HT_SSD1306Wire.h"
 #include <Bounce2.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
 
+// === Display ===
 static SSD1306Wire display(0x3c, 500000, SDA_OLED, SCL_OLED, GEOMETRY_128_64, RST_OLED);
 
-#define BUTTON_PIN 0 // USER button GPIO
-#define HOLD_TIME 2000 // ms
+// === Constants ===
+constexpr const char* FIRMWARE_VERSION = "v1.0";
+constexpr uint8_t BUTTON_PIN = 0;
+constexpr uint8_t WIFI_LED_PIN = 35;
+constexpr unsigned long HOLD_TIME = 5000; // 5s
+constexpr uint32_t RF_FREQUENCY = 915000000; // Hz
+constexpr int TX_OUTPUT_POWER = 21;
+constexpr uint32_t RX_TIMEOUT_VALUE = 1000;
+constexpr int LORA_BANDWIDTH_CFG = 0;          // 0 = 125 kHz
+constexpr int LORA_SPREADING_FACTOR_CFG = 7;
+constexpr int LORA_CODING_RATE_CFG = 1;
+constexpr int LORA_PREAMBLE_LEN_CFG = 8;
+constexpr bool LORA_FIX_LEN_CFG = false;
+constexpr bool LORA_CRC_ENABLED = true;
+constexpr int LORA_FREQ_HOP_ON_CFG = 0;
+constexpr int LORA_HOP_PERIOD_CFG = 0;
+constexpr bool LORA_IQ_INVERTED_CFG = false;
+constexpr uint32_t LORA_TX_TIMEOUT_CFG = 3000;
+constexpr size_t BUFFER_SIZE = 160;
+constexpr unsigned long TEST_SEND_PERIOD = 5000; // ms
 
-#define RF_FREQUENCY    915000000 // Hz
-#define TX_OUTPUT_POWER 21        // dBm
-#define LORA_BANDWIDTH  0
-#define LORA_SPREADING_FACTOR 7
-#define LORA_CODINGRATE 1
-#define LORA_PREAMBLE_LENGTH 8
-#define LORA_FIX_LENGTH_PAYLOAD_ON false
-#define LORA_IQ_INVERSION_ON false
-#define RX_TIMEOUT_VALUE 1000
-#define BUFFER_SIZE 160
-
-const char* MAGIC_WORD = "NHSCC";
+// === Globals ===
 char txpacket[BUFFER_SIZE];
-
 bool lora_idle = true;
 
+Bounce debouncer = Bounce();
+Preferences preferences;
+WebServer server(80);
 static RadioEvents_t RadioEvents;
-void OnTxDone(void);
-void OnTxTimeout(void);
 
-enum Mode {
-  MODE_SERIAL = 0,
-  MODE_TEST = 1
-};
+void toggleMode();
+
+enum Mode { MODE_SERIAL, MODE_TEST, MODE_WIFI };
 Mode currentMode = MODE_SERIAL;
 
 unsigned long buttonPressStart = 0;
 bool holdHandled = false;
 
-Bounce debouncer = Bounce();
+String magicWord;
 
-// Test mode data
 const char* CarIDList[] = {
-    "66EVX", "87EVX", "41EVX", "18CAMS", "127CAMS", "5CAMS", "83SS", "88ES", "49GST", "91XP", "9SSP", "77EST"
+  "66EVX", "87EVX", "41EVX", "18CAMS", "127CAMS",
+  "5CAMS", "83SS", "88ES", "49GST", "91XP", "9SSP", "77EST"
 };
-const int CarIDListSize = sizeof(CarIDList)/sizeof(CarIDList[0]);
-const char* CarID = "66EVX";
-float finishtime = 24.345;
-bool ftd = true;
-bool personalbest = false;
-bool offcourse = false;
-int cones = 0;
+const int CarIDListSize = sizeof(CarIDList) / sizeof(CarIDList[0]);
+
 static int sendStep = 0;
 unsigned long lastTestSend = 0;
-const unsigned long TEST_SEND_PERIOD = 5000; // ms
 
-void VextON(void) {
-  pinMode(Vext, OUTPUT);
-  digitalWrite(Vext, LOW);
-}
-void VextOFF(void) {
-  pinMode(Vext, OUTPUT);
-  digitalWrite(Vext, HIGH);
-}
+// === Utility ===
+void VextON() { pinMode(Vext, OUTPUT); digitalWrite(Vext, LOW); }
+void VextOFF() { pinMode(Vext, OUTPUT); digitalWrite(Vext, HIGH); }
 
-void showMode() {
+void updateDisplay(const String& line1, const String& line2 = "") {
   display.clear();
-  display.setFont(ArialMT_Plain_16);
-  if (currentMode == MODE_SERIAL) {
-    display.drawString(0, 0, "Mode: Serial");
-    display.drawString(0, 20, "Waiting for FT");
-  } else {
-    display.drawString(0, 0, "Mode: Test");
-  }
+  display.drawString(0, 0, line1);
+  if (!line2.isEmpty()) display.drawString(0, 20, line2);
   display.display();
 }
 
+// === Mode UI ===
+void showMode() {
+  switch (currentMode) {
+    case MODE_SERIAL: updateDisplay(F("Mode: Serial"), F("Waiting for App")); break;
+    case MODE_TEST:   updateDisplay(F("Mode: Test")); break;
+    case MODE_WIFI:   updateDisplay(F("Mode: WiFi"), WiFi.softAPSSID()); break;
+  }
+}
+
+// === Web Server Handlers ===
+void handleRoot() {
+  String page = R"rawliteral(
+<!DOCTYPE html><html><head><title>SLT Sender Config</title>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<style>
+body { font-family: sans-serif; max-width: 500px; margin: auto; padding: 20px; background: #f4f4f4; color: #333; }
+h2 { text-align: center; }
+form { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+label { display: block; margin-top: 15px; font-weight: bold; }
+input[type='text'], input[type='submit'] { width: 100%; padding: 10px; margin-top: 5px; border-radius: 5px; border: 1px solid #ccc; }
+input[type='submit'] { background: #2196f3; color: white; border: none; margin-top: 20px; cursor: pointer; }
+input[type='submit']:hover { background: #1976d2; }
+</style>
+</head><body>
+<h2>SLT Sender Config</h2>
+<form action='/set' method='POST'>
+<label for='magic'>Magic Word</label>
+<input type='text' id='magic' name='magic' value=')rawliteral";
+
+  page += magicWord;
+
+  page += R"rawliteral('>
+<input type='submit' value='Save'>
+</form>
+<hr>
+<p>SLT Sender Config Page</p>
+<small>Firmware )rawliteral";
+
+page += FIRMWARE_VERSION;
+
+page += R"rawliteral(</small>
+</body></html>
+)rawliteral";
+
+  server.send(200, "text/html", page);
+}
+
+void handleSetMagic() {
+  if (server.hasArg("magic")) {
+    magicWord = server.arg("magic");
+    preferences.begin("settings", false);
+    preferences.putString("magicWord", magicWord);
+    preferences.end();
+    server.sendHeader("Location", "/");
+    server.send(303);
+  } else {
+    server.send(400, "text/plain", "Bad Request");
+  }
+}
+
+// === WiFi Mode ===
+void startWiFi() {
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("SLT-Sender", "12345678");
+  server.on("/", handleRoot);
+  server.on("/set", HTTP_POST, handleSetMagic);
+  server.begin();
+  digitalWrite(WIFI_LED_PIN, HIGH);
+  currentMode = MODE_WIFI;
+  showMode();
+}
+
+void stopWiFi() {
+  server.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_OFF);
+  digitalWrite(WIFI_LED_PIN, LOW);
+}
+
+// === Setup and Loop ===
 void setup() {
   Serial.begin(9600);
   Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);
+  VextON(); delay(100);
 
-  VextON();
-  delay(100);
   display.init();
-  display.setFont(ArialMT_Plain_24);
+  display.setFont(ArialMT_Plain_16);
+
+  pinMode(WIFI_LED_PIN, OUTPUT);
+  digitalWrite(WIFI_LED_PIN, LOW);
 
   debouncer.attach(BUTTON_PIN, INPUT_PULLUP);
-  debouncer.interval(25); // Debounce interval
+  debouncer.interval(25);
 
-  RadioEvents.TxDone = OnTxDone;
-  RadioEvents.TxTimeout = OnTxTimeout;
+  RadioEvents.TxDone = []() {
+    Serial.println(F("TX done......"));
+    display.drawString(0, 40, F("Sent"));
+    display.display();
+    lora_idle = true;
+  };
+
+  RadioEvents.TxTimeout = []() {
+    Radio.Sleep();
+    Serial.println(F("TX Timeout......"));
+    lora_idle = true;
+  };
 
   Radio.Init(&RadioEvents);
   Radio.SetChannel(RF_FREQUENCY);
-  Radio.SetTxConfig(MODEM_LORA, TX_OUTPUT_POWER, 0, LORA_BANDWIDTH,
-                    LORA_SPREADING_FACTOR, LORA_CODINGRATE,
-                    LORA_PREAMBLE_LENGTH, LORA_FIX_LENGTH_PAYLOAD_ON,
-                    true, 0, 0, LORA_IQ_INVERSION_ON, 3000);
+  Radio.SetTxConfig(MODEM_LORA, TX_OUTPUT_POWER, 0, LORA_BANDWIDTH_CFG,
+                    LORA_SPREADING_FACTOR_CFG, LORA_CODING_RATE_CFG, LORA_PREAMBLE_LEN_CFG,
+                    LORA_FIX_LEN_CFG, LORA_CRC_ENABLED, LORA_FREQ_HOP_ON_CFG, LORA_HOP_PERIOD_CFG,
+                    LORA_IQ_INVERTED_CFG, LORA_TX_TIMEOUT_CFG);
+
+  preferences.begin("settings", true);
+  magicWord = preferences.getString("magicWord", "NHSCC");
+  preferences.end();
 
   showMode();
-  randomSeed(analogRead(0));
+  randomSeed(esp_random());
 }
 
 void loop() {
@@ -107,147 +197,85 @@ void loop() {
   if (debouncer.fell()) {
     buttonPressStart = millis();
     holdHandled = false;
-  } else if (debouncer.read() == LOW && !holdHandled && (millis() - buttonPressStart >= HOLD_TIME)) {
-    toggleMode();
+  } else if (debouncer.read() == LOW && !holdHandled && millis() - buttonPressStart >= HOLD_TIME) {
+    startWiFi();
     holdHandled = true;
   } else if (debouncer.rose()) {
+    if (!holdHandled) {
+      toggleMode();
+    }
     buttonPressStart = 0;
     holdHandled = false;
   }
 
-  if (currentMode == MODE_SERIAL) {
-    if (lora_idle && Serial.available()) {
-      String inString = Serial.readStringUntil('\n');
-      inString.trim();
+  if (currentMode == MODE_WIFI) server.handleClient();
 
-      if (inString == "PING") {
-        Serial.println("PONG");
-        display.clear();
-        display.drawString(0, 0, "Mode: Serial");
-        display.drawString(0, 20, "FT Connected");
-        display.display();
-        return;
-      }
+  if (currentMode == MODE_SERIAL && lora_idle && Serial.available()) {
+    String inString = Serial.readStringUntil('\n');
+    inString.trim();
 
-      if (inString.length() > 0 && (strlen(MAGIC_WORD) + 1 + inString.length()) < BUFFER_SIZE) {
-        int idxs[6];
-        int lastIdx = -1;
-        for (int i = 0; i < 6; i++) {
-          idxs[i] = inString.indexOf(',', lastIdx + 1);
-          if (idxs[i] == -1 && i < 5) {
-            Serial.println("Invalid input format!");
-            return;
-          }
-          lastIdx = idxs[i];
-        }
-
-        String carID = inString.substring(0, idxs[0]);
-        String finishTimeStr = inString.substring(idxs[0] + 1, idxs[1]);
-        String ftdStr = inString.substring(idxs[1] + 1, idxs[2]);
-        String pbStr = inString.substring(idxs[2] + 1, idxs[3]);
-        String ocStr = inString.substring(idxs[3] + 1, idxs[4]);
-        String conesStr = inString.substring(idxs[4] + 1);
-
-        int ftd = ftdStr.toInt();
-        int personalBest = pbStr.toInt();
-        int offcourse = ocStr.toInt();
-        int cones = conesStr.toInt();
-        float finishTime = finishTimeStr.toFloat();
-
-        snprintf(txpacket, BUFFER_SIZE, "%s,2,%.3f,%d,%d,%d,0,0,%d,%s",
-                 MAGIC_WORD,
-                 finishTime,
-                 personalBest,
-                 ftd,
-                 offcourse,
-                 cones,
-                 carID.c_str());
-
-        Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", txpacket, strlen(txpacket));
-
-        display.clear();
-        display.drawString(0, 0, finishTimeStr);
-        display.display();
-
-        Radio.Send((uint8_t *)txpacket, strlen(txpacket));
-        lora_idle = false;
-      } else {
-        Serial.println("Input too long or empty! (max 79 chars)");
-      }
+    if (inString == "PING") {
+      Serial.println(F("PONG"));
+      updateDisplay(F("Mode: Serial"), F("App Connected"));
+      return;
     }
-  } else if (currentMode == MODE_TEST) {
-    unsigned long now = millis();
-    if (lora_idle && (now - lastTestSend >= TEST_SEND_PERIOD)) {
-        int carIdx = random(0, CarIDListSize);
-        CarID = CarIDList[carIdx];
 
-        ftd = false;
-        personalbest = false;
-        offcourse = false;
-        cones = 0;
-        bool dnf = false;
-        bool rerun = false;
-
-        switch (sendStep) {
-            case 0: break;
-            case 1: personalbest = true; break;
-            case 2: ftd = true; break;
-            case 3: offcourse = true; break;
-            case 4: dnf = true; break;
-            case 5: rerun = true; break;
-            case 6: cones = 2; break;
-        }
-
-        sendStep = (sendStep + 1) % 7;
-
-        long finishtime_raw = random(20000, 40001);
-        finishtime = finishtime_raw / 1000.0;
-
-        snprintf(txpacket, BUFFER_SIZE, "%s,2,%.3f,%d,%d,%d,%d,%d,%d,%s",
-                 MAGIC_WORD,
-                 finishtime,
-                 personalbest ? 1 : 0,
-                 ftd ? 1 : 0,
-                 offcourse ? 1 : 0,
-                 dnf ? 1 : 0,
-                 rerun ? 1 : 0,
-                 cones,
-                 CarID);
-
-        Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", txpacket, strlen(txpacket));
-
-        char ft_str[10];
-        snprintf(ft_str, sizeof(ft_str), "%.3f", finishtime);
-
-        display.clear();
-        display.drawString(0, 0, "Mode: Test");
-        display.drawString(0, 20, ft_str);
-        display.display();
-
-        Radio.Send((uint8_t *)txpacket, strlen(txpacket));
-        lora_idle = false;
-        lastTestSend = now;
+    int idx[6], pos = -1;
+    for (int i = 0; i < 6; ++i) {
+      idx[i] = inString.indexOf(',', pos + 1);
+      if (idx[i] == -1 && i < 5) return;
+      pos = idx[i];
     }
+
+    String carID = inString.substring(0, idx[0]);
+    float finishTime = inString.substring(idx[0] + 1, idx[1]).toFloat();
+    int ftd = inString.substring(idx[1] + 1, idx[2]).toInt();
+    int pb = inString.substring(idx[2] + 1, idx[3]).toInt();
+    int oc = inString.substring(idx[3] + 1, idx[4]).toInt();
+    int cones = inString.substring(idx[4] + 1).toInt();
+
+    snprintf(txpacket, BUFFER_SIZE, "%s,2,%.3f,%d,%d,%d,0,0,%d,%s",
+             magicWord.c_str(), finishTime, pb, ftd, oc, cones, carID.c_str());
+
+    Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", txpacket, strlen(txpacket));
+    updateDisplay(String(finishTime, 3));
+    Radio.Send((uint8_t *)txpacket, strlen(txpacket));
+    lora_idle = false;
+  }
+
+  if (currentMode == MODE_TEST && lora_idle && millis() - lastTestSend >= TEST_SEND_PERIOD) {
+    const char* CarID = CarIDList[random(0, CarIDListSize)];
+    bool pb = false, ftd = false, oc = false, dnf = false, rerun = false;
+    int cones = 0;
+
+    switch (sendStep++) {
+      case 1: pb = true; break;
+      case 2: ftd = true; break;
+      case 3: oc = true; break;
+      case 4: dnf = true; break;
+      case 5: rerun = true; break;
+      case 6: cones = 2; break;
+    }
+    if (sendStep > 6) sendStep = 0;
+
+    float ft = random(20000, 40001) / 1000.0;
+    snprintf(txpacket, BUFFER_SIZE, "%s,2,%.3f,%d,%d,%d,%d,%d,%d,%s",
+             magicWord.c_str(), ft, pb, ftd, oc, dnf, rerun, cones, CarID);
+
+    Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", txpacket, strlen(txpacket));
+    updateDisplay(F("Mode: Test"), String(ft, 3));
+    Radio.Send((uint8_t *)txpacket, strlen(txpacket));
+    lora_idle = false;
+    lastTestSend = millis();
   }
 
   Radio.IrqProcess();
 }
 
+// === Toggle Mode ===
 void toggleMode() {
+  if (currentMode == MODE_WIFI) stopWiFi();
   currentMode = (currentMode == MODE_SERIAL) ? MODE_TEST : MODE_SERIAL;
   showMode();
-  Serial.printf("Mode switched to %s\n", (currentMode == MODE_SERIAL) ? "Serial" : "Test");
-}
-
-void OnTxDone(void) {
-  Serial.println("TX done......");
-  display.drawString(0, 40, "Sent");
-  display.display();
-  lora_idle = true;
-}
-
-void OnTxTimeout(void) {
-  Radio.Sleep();
-  Serial.println("TX Timeout......");
-  lora_idle = true;
+  Serial.printf("Mode switched to %s\n", currentMode == MODE_SERIAL ? "Serial" : "Test");
 }
