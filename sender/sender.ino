@@ -319,4 +319,9 @@ void toggleMode() {
   showMode();
   Serial.printf("Mode switched to %s\n", currentMode == MODE_APP ? "App" :
                 currentMode == MODE_SERIAL ? "Serial" : "Test");
+
+  if (currentMode == MODE_SERIAL) {
+    while (TimerSerial.available()) TimerSerial.read(); // flush any leftover data
+    timerBuffer = "";
+  }
 }
