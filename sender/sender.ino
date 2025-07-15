@@ -40,10 +40,13 @@ Preferences preferences;
 WebServer server(80);
 static RadioEvents_t RadioEvents;
 
+HardwareSerial TimerSerial(1);
+static String timerBuffer = "";
+
 void toggleMode();
 
-enum Mode { MODE_SERIAL, MODE_TEST, MODE_WIFI };
-Mode currentMode = MODE_SERIAL;
+enum Mode { MODE_APP, MODE_SERIAL, MODE_TEST, MODE_WIFI };
+Mode currentMode = MODE_APP;
 
 unsigned long buttonPressStart = 0;
 bool holdHandled = false;
@@ -73,7 +76,8 @@ void updateDisplay(const String& line1, const String& line2 = "") {
 // === Mode UI ===
 void showMode() {
   switch (currentMode) {
-    case MODE_SERIAL: updateDisplay(F("Mode: Serial"), F("Waiting for App")); break;
+    case MODE_APP:    updateDisplay(F("Mode: App"), F("Waiting for App")); break;
+    case MODE_SERIAL: updateDisplay(F("Mode: Serial"), F("Listening...")); break;
     case MODE_TEST:   updateDisplay(F("Mode: Test")); break;
     case MODE_WIFI:   updateDisplay(F("Mode: WiFi"), WiFi.softAPSSID()); break;
   }
@@ -100,7 +104,6 @@ input[type='submit']:hover { background: #1976d2; }
 <input type='text' id='magic' name='magic' value=')rawliteral";
 
   page += magicWord;
-
   page += R"rawliteral('>
 <input type='submit' value='Save'>
 </form>
@@ -108,9 +111,8 @@ input[type='submit']:hover { background: #1976d2; }
 <p>SLT Sender Config Page</p>
 <small>Firmware )rawliteral";
 
-page += FIRMWARE_VERSION;
-
-page += R"rawliteral(</small>
+  page += FIRMWARE_VERSION;
+  page += R"rawliteral(</small>
 </body></html>
 )rawliteral";
 
@@ -152,6 +154,7 @@ void stopWiFi() {
 // === Setup and Loop ===
 void setup() {
   Serial.begin(9600);
+  TimerSerial.begin(9600, SERIAL_8N1, 45, 46);
   Mcu.begin(HELTEC_BOARD, SLOW_CLK_TPYE);
   VextON(); delay(100);
 
@@ -210,13 +213,13 @@ void loop() {
 
   if (currentMode == MODE_WIFI) server.handleClient();
 
-  if (currentMode == MODE_SERIAL && lora_idle && Serial.available()) {
+  if (currentMode == MODE_APP && lora_idle && Serial.available()) {
     String inString = Serial.readStringUntil('\n');
     inString.trim();
 
     if (inString == "PING") {
       Serial.println(F("PONG"));
-      updateDisplay(F("Mode: Serial"), F("App Connected"));
+      updateDisplay(F("Mode: App"), F("App Connected"));
       return;
     }
 
@@ -241,6 +244,44 @@ void loop() {
     updateDisplay(String(finishTime, 3));
     Radio.Send((uint8_t *)txpacket, strlen(txpacket));
     lora_idle = false;
+  }
+
+  if (currentMode == MODE_SERIAL && lora_idle && TimerSerial.available()) {
+    while (TimerSerial.available()) {
+      char c = TimerSerial.read();
+      if (c == '\n' || c == '\r') {
+        if (timerBuffer.length() > 0) {
+          String input = timerBuffer;
+          timerBuffer = "";
+          input.trim();
+
+          String digits = "";
+          for (char ch : input) {
+            if (isdigit(ch)) digits += ch;
+          }
+
+          if (digits.length() == 6 && digits != "000000") {
+            String reversed = "";
+            for (int i = 5; i >= 0; --i) reversed += digits[i];
+
+            float time = reversed.toFloat() / 1000.0;
+            String timeStr = String(time, 3);
+            if (timeStr.startsWith("0")) timeStr = timeStr.substring(1);
+
+            updateDisplay("Time:", timeStr);
+
+            snprintf(txpacket, BUFFER_SIZE, "%s,2,%.3f,0,0,0,0,0,0,00TIME",
+                     magicWord.c_str(), time);
+
+            Serial.printf("\r\nsending packet \"%s\" , length %d\r\n", txpacket, strlen(txpacket));
+            Radio.Send((uint8_t *)txpacket, strlen(txpacket));
+            lora_idle = false;
+          }
+        }
+      } else {
+        timerBuffer += c;
+      }
+    }
   }
 
   if (currentMode == MODE_TEST && lora_idle && millis() - lastTestSend >= TEST_SEND_PERIOD) {
@@ -272,10 +313,10 @@ void loop() {
   Radio.IrqProcess();
 }
 
-// === Toggle Mode ===
 void toggleMode() {
   if (currentMode == MODE_WIFI) stopWiFi();
-  currentMode = (currentMode == MODE_SERIAL) ? MODE_TEST : MODE_SERIAL;
+  currentMode = (Mode)((currentMode + 1) % 3);
   showMode();
-  Serial.printf("Mode switched to %s\n", currentMode == MODE_SERIAL ? "Serial" : "Test");
+  Serial.printf("Mode switched to %s\n", currentMode == MODE_APP ? "App" :
+                currentMode == MODE_SERIAL ? "Serial" : "Test");
 }
