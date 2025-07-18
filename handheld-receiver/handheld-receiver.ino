@@ -417,6 +417,15 @@ void OnRxDone(uint8_t *payload, uint16_t size, int16_t packetRssi, int8_t packet
 
         display.clear();
 
+        // Special case: show ONLY the time if carID is "00TIME"
+        if (String(carID).equalsIgnoreCase("00TIME")) {
+            display.setFont(ArialMT_Plain_24);
+            display.drawString(0, 20, String(finishTime));
+            display.display();
+            loraIdle = true;
+            return;
+        }
+
         if (settings.diagnostics) {
             display.setFont(ArialMT_Plain_16);
             display.drawString(0, 0, "Diagnostics Mode");
