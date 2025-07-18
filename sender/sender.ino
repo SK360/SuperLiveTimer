@@ -250,17 +250,23 @@ void loop() {
     while (TimerSerial.available()) {
       char c = TimerSerial.read();
       if (c == '\n' || c == '\r') {
-        if (timerBuffer.length() > 0) {
-          String input = timerBuffer;
-          timerBuffer = "";
-          input.trim();
+      if (timerBuffer.length() > 0) {
+        String input = timerBuffer;
+        timerBuffer = "";
+        input.trim();
 
-          String digits = "";
-          for (char ch : input) {
-            if (isdigit(ch)) digits += ch;
-          }
+        // Ignore lines starting with A or B
+        if (input.startsWith("A") || input.startsWith("B")) {
+          Serial.printf("Ignoring non-timing data: %s\n", input.c_str());
+          return;
+        }
 
-          if (digits.length() == 6 && digits != "000000") {
+        String digits = "";
+        for (char ch : input) {
+          if (isdigit(ch)) digits += ch;
+        }
+
+        if (digits.length() == 6 && digits != "000000") {
             String reversed = "";
             for (int i = 5; i >= 0; --i) reversed += digits[i];
 
