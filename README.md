@@ -1,13 +1,14 @@
 
-# Heltec V3 LoRa: Wireless Finish Time System
+# SuperLiveTimer
 
-This project contains Arduino sketches for a **LoRa-based wireless finish time display system** using the [Heltec Wireless Stick Lite V3](https://heltec.org/project/wifi-lora-32-v3/) (ESP32 with LoRa and OLED display).
+This project contains Arduino sketches for a **LoRa-based wireless timing display system** using the [Heltec V3](https://heltec.org/project/wifi-lora-32-v3/) (ESP32 with LoRa and OLED display).
 
 The system is designed for **motorsports or time trial events** where finish times and results need to be transmitted wirelessly from a sender to one or more receivers, and displayed on an OLED screen in real-time.
 
 ## Sketches Overview
 
-- **receiver.ino**: Listens for incoming LoRa packets, displays results on the Heltec OLED, and outputs plain CSV to Serial for external displays.
+- **receiver.ino**: Listens for incoming LoRa packets and outputs plain CSV to Serial.  Made for sending data to external displays.
+- **handheld-receiver.ino**: Made for incar or handheld timing displays based on the Heltec V3. Has a WiFi hotspot mode for configuration changes.
 - **sender.ino**: Supports both live Serial input mode **and** a Test Data mode (switchable by button press).
 
 ---
@@ -32,11 +33,12 @@ Install via **Library Manager**:
 
 Communication uses a **CSV string**:
 ```
-CarID,FinishTime,FTD,PersonalBest,OffCourse,Cones
+heat,finishTime,personalBest,ftd,offCourse,dnf,rerun,cones,carID
+personalBest, ftd, offCourse, dnf and rerun are bools and are expecting a 0 or 1
 ```
 
 **Example:**  
-`66EVX,23.512,1,0,0,0`
+`1,34.334,0,0,0,0,0,0,66EVX`
 
 ---
 
@@ -44,7 +46,6 @@ CarID,FinishTime,FTD,PersonalBest,OffCourse,Cones
 
 ### 1. receiver.ino
 
-- **Displays** incoming results on OLED (Car ID, time, status).
 - **Outputs** received/parsed CSV data to Serial (115200 baud) for connection to timer displays, PCs, or Raspberry Pi.
 - **MAGIC_WORD** filtering ensures only packets sent by a matching sender are displayed.
 - **Setup:**
@@ -52,7 +53,16 @@ CarID,FinishTime,FTD,PersonalBest,OffCourse,Cones
   2. Connect USB to PC/display hardware if using serial output.
   3. Watch the OLED or external display for results.
 
-### 2. sender.ino
+### 2. handheld-receiver.ino
+
+- **Displays** incoming results on OLED (Car ID, time, status).
+- **MAGIC_WORD** filtering ensures only packets sent by a matching sender are displayed.
+- **Setup:**
+  1. Flash `handheld-receiver.ino` to a Heltec V3 board.
+  2. Connect USB to PC/display hardware if using serial output.
+  3. Watch the OLED or external display for results.
+
+### 3. sender.ino
 
 - **Dual-mode operation:**  
   - **Serial Mode:** Default. Any line sent over Serial is parsed and sent via LoRa.
@@ -70,10 +80,10 @@ CarID,FinishTime,FTD,PersonalBest,OffCourse,Cones
 ## Example Workflows
 
 ### Serial Input Mode
-1. Open Serial Monitor (115200 baud).
+1. Open Serial Monitor (9600 baud).
 2. Enter a line like:  
    ```
-   18CAMS,24.451,0,1,0,2
+   1,34.334,0,0,0,0,0,0,66EVX
    ```
 3. Sender transmits it, receiver displays and relays to external hardware via Serial.
 
